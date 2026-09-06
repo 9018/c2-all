@@ -25,6 +25,14 @@ func CreateEmp3r0rHTTPClient(c2_addr, proxyServer string) *http.Client {
 		logging.Fatalf("ExtractCABundle: %v", err)
 	}
 
+	// Rendezvous relay URLs (ws:// or wss://) don't need an HTTP client —
+	// the worker_ws channel dials its own WebSocket. Return nil; callers
+	// in establishChannelStream only use the client for http-based channels.
+	if strings.HasPrefix(c2_addr, "ws://") || strings.HasPrefix(c2_addr, "wss://") {
+		logging.Infof("Relay endpoint detected (%s...), skipping HTTP client init", c2_addr)
+		return nil
+	}
+
 	// C2 URL
 	addr := c2_addr
 	if !strings.HasPrefix(addr, "http") {

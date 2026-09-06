@@ -17,7 +17,8 @@ import (
 func StartC2H2StreamServer() {
 	channelWrapper, err := transport.GetC2ChannelWrapper(def.C2ChannelModeH2Conn)
 	if err != nil {
-		logging.Fatalf("StartC2H2StreamServer: resolve %q wrapper: %v", def.C2ChannelModeH2Conn, err)
+		logging.Warningf("StartC2H2StreamServer: resolve %q wrapper (non-fatal): %v", def.C2ChannelModeH2Conn, err)
+		return
 	}
 
 	mux := http.NewServeMux()
@@ -25,6 +26,11 @@ func StartC2H2StreamServer() {
 	registerC2H2StreamAcceptHandler(mux, channelWrapper)
 
 	listener := setupC2TLSListener()
+	if listener == nil {
+		logging.Warningf("C2 H2 stream server not started due to TLS listener failure")
+		return
+	}
+
 	network.EmpTLSServer = &http.Server{
 		Addr:    fmt.Sprintf(":%s", live.RuntimeConfig.CCH2Port),
 		Handler: mux,
@@ -36,7 +42,7 @@ func StartC2H2StreamServer() {
 			logging.Warningf("C2 h2 stream server is shutdown")
 			return
 		}
-		logging.Fatalf("Failed to start C2 h2 stream server at *:%s: %v", live.RuntimeConfig.CCH2Port, err)
+		logging.Warningf("Failed to start C2 h2 stream server at *:%s (non-fatal): %v", live.RuntimeConfig.CCH2Port, err)
 	}
 }
 

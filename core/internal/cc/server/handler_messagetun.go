@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -392,6 +393,17 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 			// if not a handshake, forward message to operators
 			// also cache it for automated tests or local usage
 			if msg.JobID != "" {
+				// PTY streams (interactive shell sessions) carry raw bytes with
+				// ANSI escapes — base64 them so JSON transport preserves them
+				// exactly. Frames are identified by CmdSlice[0] == shell.
+				if len(msg.CmdSlice) > 0 && strings.TrimPrefix(msg.CmdSlice[0], "!") == "shell" {
+					BroadcastToWebClients("pty_output", map[string]interface{}{
+						"JobID":    msg.JobID,
+						"Data":     base64.StdEncoding.EncodeToString(msg.Response),
+						"AgentTag": msg.Tag,
+					})
+					continue
+				}
 				if _, knownJob := live.CmdTime.Load(msg.JobID); knownJob {
 					responseToCache := msg.Response
 					if len(responseToCache) > maxCmdResultCacheBytes {
@@ -405,6 +417,12 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 					}
 					// persistence
 					jobs.HandleOutput(msg.JobID, responseToCache)
+					// Broadcast command output to web clients
+					BroadcastToWebClients("command_output", map[string]interface{}{
+						"JobID":    msg.JobID,
+						"Response": string(responseToCache),
+						"AgentTag": msg.Tag,
+					})
 				} else {
 					logging.Warningf("handleMessageTunnel: dropping response for unknown job ID %s", strconv.Quote(msg.JobID))
 				}

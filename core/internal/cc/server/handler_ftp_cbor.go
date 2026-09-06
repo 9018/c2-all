@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/agents"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/network"
@@ -11,6 +13,33 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 )
+
+// httpStreamSink bridges an incoming agent FTP CBOR stream to an HTTP response via a buffered channel.
+// It is used by the Web UI download endpoint to stream large/binary files without going through the operator relay.
+type httpStreamSink struct {
+	ch   chan []byte
+	done chan struct{}
+}
+
+var webFTPSinks sync.Map // map[token]*httpStreamSink
+
+// RegisterWebFTPSink registers a streaming sink for a given FTP token.
+// The Web UI handler consumes from sink.ch until sink.done is closed.
+func RegisterWebFTPSink(token string) *httpStreamSink {
+	sink := &httpStreamSink{ch: make(chan []byte, 64), done: make(chan struct{})}
+	webFTPSinks.Store(token, sink)
+	logging.Debugf("WebFTPSink registered for token=%s", token)
+	return sink
+}
+
+func closeWebFTPSink(token string) {
+	if val, ok := webFTPSinks.LoadAndDelete(token); ok {
+		sink := val.(*httpStreamSink)
+		close(sink.ch)
+		close(sink.done)
+		logging.Debugf("WebFTPSink closed for token=%s", token)
+	}
+}
 
 // handleFileUploadStream processes an FTP upload directly over the pure CBOR encrypted stream.
 // It bypasses the legacy HTTP multiplexer and injects the raw SecureConn into the stream handler.
@@ -82,6 +111,62 @@ func handleFileUploadStream(conn *transport.SecureConn, agentUUID, streamID, rem
 		conn.Close()
 		return
 	}
+	// If this stream is owned by a Web UI HTTP download, bridge it directly via sink.
+	if sinkVal, ok := webFTPSinks.Load(streamID); ok {
+		sink := sinkVal.(*httpStreamSink)
+		buf := make([]byte, 64*1024)
+		for {
+			n, readErr := conn.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				select {
+				case sink.ch <- chunk:
+				default:
+					// Backpressure: drop if consumer is too slow to avoid blocking the tunnel
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		closeWebFTPSink(streamID)
+		cancel()
+		conn.Close()
+		return
+	}
+
+	// Allow brief time for a Web sink to register (avoid race with HTTP handler)
+	if sh.OperatorSession == "" {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if sinkVal, ok := webFTPSinks.Load(streamID); ok {
+				sink := sinkVal.(*httpStreamSink)
+				buf := make([]byte, 64*1024)
+				for {
+					n, readErr := conn.Read(buf)
+					if n > 0 {
+						chunk := make([]byte, n)
+						copy(chunk, buf[:n])
+						select {
+						case sink.ch <- chunk:
+						default:
+							// Backpressure: drop if consumer is too slow to avoid blocking the tunnel
+						}
+					}
+					if readErr != nil {
+						break
+					}
+				}
+				closeWebFTPSink(streamID)
+				cancel()
+				conn.Close()
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
 	if sh.OperatorSession == "" {
 		logging.Errorf("CRITICAL: handleFileUploadStream: missing owner operator for FTP token %q", streamID)
 		cancel()

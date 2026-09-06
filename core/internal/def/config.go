@@ -115,6 +115,7 @@ type Config struct {
 	C2TransportProxy string `cbor:"26,keyasint"` // proxy for C2 transport
 	CDNProxy         string `cbor:"27,keyasint"` // websocket proxy, see go-cdn2proxy
 	DoHServer        string `cbor:"28,keyasint"` // DNS over HTTPS server, for name resolving
+	RelayURLs        []string `cbor:"36,keyasint"` // rendezvous relay endpoints (worker_ws), CC role URLs; agents use their own list
 
 	// These were deprecated and removed
 	AgentUUID    string `cbor:"32,keyasint"` // UUID of agent, used to verify agent

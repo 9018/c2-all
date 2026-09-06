@@ -20,6 +20,7 @@ var (
 	EmpTLSServerCancel context.CancelFunc
 	EmpKCPCtx          context.Context
 	EmpKCPCancel       context.CancelFunc
+	EmpRelayCancel     context.CancelFunc
 
 	// Shared stream handlers and maps
 	FTPStreams sync.Map

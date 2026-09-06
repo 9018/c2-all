@@ -26,11 +26,15 @@ func StartOperatorMTLSServer(port int) {
 	// Load client CA certificate
 	clientCACert, err := os.ReadFile(transport.OperatorCaCrtFile)
 	if err != nil {
-		logging.Fatalf("Failed to read client CA certificate: %v", err)
+		logging.Warningf("Failed to read client CA certificate (non-fatal): %v", err)
+		logging.Warningf("mTLS authentication will not work, but Web UI will still work")
+		return
 	}
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(clientCACert) {
-		logging.Fatalf("Failed to append client CA certificate")
+		logging.Warningf("Failed to append client CA certificate (non-fatal)")
+		logging.Warningf("mTLS authentication will not work, but Web UI will still work")
+		return
 	}
 
 	// Configure TLS with mTLS
@@ -52,6 +56,7 @@ func StartOperatorMTLSServer(port int) {
 			logging.Warningf("C2 operator service is shutdown")
 			return
 		}
-		logging.Fatalf("Failed to start HTTPS (mTLS) server at *:%d: %v", port, err)
+		logging.Warningf("Failed to start HTTPS (mTLS) server at *:%d (non-fatal): %v", port, err)
+		logging.Warningf("Operator mTLS features will be unavailable, but Web UI will still work")
 	}
 }

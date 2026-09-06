@@ -39,10 +39,10 @@ func prepareC2ServerPrerequisites() {
 	if agents.AgentDB == nil || agents.AgentDB.Ping() != nil {
 		dbPath := filepath.Join(live.EmpWorkSpace, "agents.db")
 		if err := agents.InitAgentDB(dbPath); err != nil {
-			logging.Fatalf("StartC2AgentTLSServer: init AgentDB: %v", err)
+			logging.Warningf("StartC2AgentTLSServer: init AgentDB (non-fatal): %v", err)
 		}
 		if active, purged, err := agents.ReconcileSessionsOnStartup(); err != nil {
-			logging.Fatalf("StartC2AgentTLSServer: reconcile sessions: %v", err)
+			logging.Warningf("StartC2AgentTLSServer: reconcile sessions (non-fatal): %v", err)
 		} else {
 			logging.Infof("Session restore: active=%d purged_stale=%d", active, purged)
 		}
@@ -50,7 +50,7 @@ func prepareC2ServerPrerequisites() {
 
 	if _, err := os.Stat(live.Temp + transport.WWW); os.IsNotExist(err) {
 		if err = os.MkdirAll(live.Temp+transport.WWW, 0o700); err != nil {
-			logging.Fatalf("StartC2AgentTLSServer: %v", err)
+			logging.Warningf("StartC2AgentTLSServer: create www dir (non-fatal): %v", err)
 		}
 	}
 
@@ -65,7 +65,8 @@ func setupC2TLSListener() net.Listener {
 
 	cert, err := tls.LoadX509KeyPair(transport.ServerCrtFile, transport.ServerKeyFile)
 	if err != nil {
-		logging.Fatalf("StartC2AgentTLSServer: load TLS keypair: %v", err)
+		logging.Warningf("StartC2AgentTLSServer: load TLS keypair (non-fatal): %v", err)
+		return nil
 	}
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
@@ -79,7 +80,8 @@ func setupC2TLSListener() net.Listener {
 
 	listener, err := tls.Listen("tcp", fmt.Sprintf(":%s", live.RuntimeConfig.CCH2Port), tlsCfg)
 	if err != nil {
-		logging.Fatalf("Failed to start C2 TLS listener at *:%s: %v", live.RuntimeConfig.CCH2Port, err)
+		logging.Warningf("Failed to start C2 TLS listener at *:%s (non-fatal): %v", live.RuntimeConfig.CCH2Port, err)
+		return nil
 	}
 	network.EmpTLSListener = listener
 
@@ -91,6 +93,10 @@ func setupC2TLSListener() net.Listener {
 // No HTTP semantics are used at this boundary.
 func startRawC2TLSServer() {
 	listener := setupC2TLSListener()
+	if listener == nil {
+		logging.Warningf("C2 TLS server not started due to previous errors")
+		return
+	}
 
 	logging.Successf("🚀 Starting C2 agent listener service with TLS at port %s", live.RuntimeConfig.CCH2Port)
 	for {
