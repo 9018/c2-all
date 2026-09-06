@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (branch `v4`, 2026-09-06)
+
+### Features
+
+* **web/agent:** interactive PTY terminal (`!shell`) — persistent stateful shell
+  sessions over xterm.js in the web panel; raw I/O streamed as base64 via a
+  dedicated `pty_output` frame; resize + multi-session + clean close supported.
+  New files: `agent/handler/pty_session.go`, `agent/handler/pty_shell.go`,
+  `web/src/components/PtyTerminal.tsx`; see `PTY_FEATURE.md` for protocol notes.
+
+### Bug Fixes
+
+* **web:** duplicate WebSocket delivery caused doubled PTY echo
+  (`wwhhooaammii`) — a zombie reconnect survived intentional disconnect under
+  React.StrictMode's double-mount, leaving two live sockets; stale sockets no
+  longer dispatch or reconnect, handlers are now unwound on cleanup.
+* **web:** "Interactive TTY" button was invisible until an agent was selected;
+  it now renders disabled with a hint instead.
+
 ## [4.12.2](https://github.com/jm33-m0/emp3r0r/compare/v4.12.1...v4.12.2) (2026-08-26)
 
 

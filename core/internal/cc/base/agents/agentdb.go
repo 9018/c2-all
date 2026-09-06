@@ -29,6 +29,13 @@ var ErrSessionAlreadyActive = errors.New("session already active")
 
 const sessionStaleWindow = 15 * time.Minute
 
+// sessionLiveWindow: heartbeat silence longer than this means the old session's
+// tunnel is dead (no authenticated frames flowing), even though the row has not
+// reached the 15-min stale window yet. A reconnecting agent — which has already
+// passed signature verification against the pinned key before session
+// admission — may take over such a dead session instead of being locked out.
+const sessionLiveWindow = 3 * time.Minute
+
 func staleThresholdUnix(now int64) int64 {
 	return now - int64(sessionStaleWindow/time.Second)
 }
@@ -205,6 +212,25 @@ func StartSession(uuid, sessionID, remoteAddr string) error {
 	if lookupErr == nil {
 		existingEpoch := sessionEpochFromID(existingSessionID)
 		if existingEpoch == currentSessionEpoch() {
+			// Same C2 process. Block only if the existing session looks LIVE
+			// (recent heartbeat). A tunnel that died silently (1006, network
+			// drop) stops feeding heartbeats but the row stays "fresh" until the
+			// stale window — without takeover the legitimate agent would be
+			// rejected as a duplicate for up to 15 minutes.
+			var lastHB int64
+			if hbErr := tx.QueryRow("SELECT last_heartbeat FROM agent_sessions WHERE uuid = ?", uuid).Scan(&lastHB); hbErr == nil && now-lastHB > int64(sessionLiveWindow/time.Second) {
+				logging.Warningf("StartSession: taking over silent session for %s (no heartbeat for %ds)", uuid, now-lastHB)
+				_, err = tx.Exec(`UPDATE agent_sessions
+					SET session_id = ?, session_start = ?, last_heartbeat = ?, remote_addr = ?
+					WHERE uuid = ?`, encodedSessionID, now, now, remoteAddr, uuid)
+				if err != nil {
+					return fmt.Errorf("takeover silent session: %v", err)
+				}
+				if err = tx.Commit(); err != nil {
+					return fmt.Errorf("commit session tx: %v", err)
+				}
+				return nil
+			}
 			return fmt.Errorf("%w: %s", ErrSessionAlreadyActive, uuid)
 		}
 		// Session persisted from a previous C2 process. Atomically take ownership.

@@ -262,6 +262,11 @@ func cborProtocolDispatch(t transport.StreamTransport) {
 		enc := cbor.NewEncoder(secureConn)
 		if err := handleAgentCheckInStream(dec, enc, &msgAuth, agentUUID, remoteAddr); err != nil {
 			logging.Errorf("CRITICAL: cborProtocolDispatch: checkin error for %s: %v", strconv.Quote(agentUUID), err)
+			// Tell the agent WHY its checkin failed. Without this the agent
+			// blocks forever waiting for an ACK that never arrives.
+			if encErr := enc.Encode(def.MsgTunData{Tag: "checkin-error", Response: []byte(err.Error())}); encErr != nil {
+				logging.Errorf("cborProtocolDispatch: failed to send checkin-error to %s: %v", strconv.Quote(agentUUID), encErr)
+			}
 		}
 
 	case live.RuntimeConfig.C2Routes.Msg:
