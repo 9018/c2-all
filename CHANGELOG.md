@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (branch `v4`, 2026-09-06)
+## Unreleased (branch `main`, 2026-09-07)
 
 ### Features
 

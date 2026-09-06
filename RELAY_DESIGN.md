@@ -102,4 +102,4 @@ CC 重启/隧道抖动（1006）后 agent 可能被永久锁在门外：
   （`go test ./internal/transport/` 的 E2E 测试依赖它）
 - 前端：React UI 由 CC 直接 serve `~/.emp3r0r/web/`（改前端后 `npm run build`
   并拷贝 dist 即可，无需重编 CC）
-- 源码仓库：github.com/9018/c2-all（分支 `v4` = 本项目，`cf-relay` = Worker）
+- 源码仓库：github.com/9018/c2-all（分支 `main`；Worker 源码在仓库内 `cf-relay/` 目录）

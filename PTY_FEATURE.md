@@ -2,7 +2,7 @@
 
 > 更新时间：2026-09-06
 > 状态：✅ 已完成并通过真实浏览器（Chromium 145 headless）端到端验证
-> 分支：`v4`（已提交并推送 github.com/9018/c2-all）
+> 分支：`main`（github.com/9018/c2-all）
 
 ## 功能概述
 
