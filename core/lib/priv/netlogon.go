@@ -26,6 +26,14 @@ type LogonSession struct {
 	Token     uintptr // impersonation-capable token for this session
 	LogonID   uint64  // AuthenticationId (LUID) of the session's logon session
 	CreatedAt time.Time
+
+	// NetOnly is always true for sessions created by MakeToken: it uses
+	// LOGON32_LOGON_NEW_CREDENTIALS (runas /netonly semantics, like Cobalt
+	// Strike's make_token), so the password is never validated, the token
+	// keeps the calling user's identity (whoami is unchanged) and the supplied
+	// credentials are used only for outbound network connections. Kerberos
+	// ticket import still works against the session's fresh LUID.
+	NetOnly bool
 }
 
 // StoreSession caches a session under name in SessionMap.
@@ -53,13 +61,18 @@ func GetSession(name string) (*LogonSession, bool) {
 	return session, ok
 }
 
-// DefaultSessionName returns "DOMAIN\user" (or just "user" for local).
+// DefaultSessionName returns "DOMAIN/user" (or just "user" for local).
+//
+// A forward slash is used instead of Windows' backslash so the name survives
+// the CC console's shell-style word splitting unquoted: typing DOMAIN/user
+// keeps its separator, while DOMAIN\user would be consumed as a shell escape
+// and arrive as DOMAINuser.
 func DefaultSessionName(session *LogonSession) string {
 	if session == nil {
 		return ""
 	}
 	if session.Domain != "" && session.Domain != "." {
-		return fmt.Sprintf("%s\\%s", session.Domain, session.User)
+		return fmt.Sprintf("%s/%s", session.Domain, session.User)
 	}
 	return session.User
 }
@@ -72,7 +85,7 @@ func ListSessions() []string {
 		if !ok {
 			return true
 		}
-		entries = append(entries, fmt.Sprintf("%s  %s\\%s  luid=0x%08x  created=%s",
+		entries = append(entries, fmt.Sprintf("%s  %s/%s  luid=0x%08x  created=%s",
 			session.Name, session.Domain, session.User,
 			session.LogonID, session.CreatedAt.Format(time.RFC3339)))
 		return true

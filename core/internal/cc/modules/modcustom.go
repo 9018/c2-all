@@ -78,6 +78,22 @@ func moduleCustom(ctx *c2context.C2Context) {
 		invocation.Coff = nil
 	}
 
+	// Pre-flight every dependency this module declares (module config
+	// "dependencies", e.g. the auto-added "coffloader" for Windows BOFs):
+	// make sure each dependency's payload is hosted and downloadable for the
+	// target agent's arch before we dispatch, so a missing dependency fails
+	// fast with a clear error instead of a download error on the agent.
+	// Dependency modules are ordinary modules — today they are DLL loader
+	// modules, but nothing in this path assumes that.
+	if ctx.Target != nil && len(config.Dependencies) > 0 {
+		for _, dep := range config.Dependencies {
+			if err := ensureModuleDependencyHosted(ctx, dep); err != nil {
+				logging.Errorf("Running %s on %s: %v", config.Name, ctx.Target.Tag, err)
+				return
+			}
+		}
+	}
+
 	invBytes, err := cbor.Marshal(invocation)
 	if err != nil {
 		logging.Errorf("Encoding invocation: %v", err)
@@ -155,22 +171,33 @@ func handleInMemoryModule(ctx *c2context.C2Context, config def.ModuleConfig, pay
 		return
 	}
 
-	// DLL modules may ship per-arch payloads (e.g. COFFLoader.x64.dll and
-	// COFFLoader.x86.dll). Pick the file matching the target agent arch.
+	// DLL loader modules (COFFLoader.x64.dll / COFFLoader.x86.dll) and
+	// COFF/BOF modules (asktgt.x64.o / asktgt.x86.o) ship per-arch payloads.
+	// Pick the file matching the target agent's own binary arch
+	// (runtime.GOARCH). Prefer GOArch over the OS kernel Arch: a 386 agent
+	// running under WoW64 on x64 Windows reports Arch "x64".
 	payloadFile := config.AgentConfig.Files[0]
 	hostedName := strings.ToLower(live.ActiveModule.Name)
-	if strings.EqualFold(payload_type, "dll") && ctx.Target != nil {
-		arch := normalizeAgentArch(ctx.Target.Arch)
-		payloadFile = selectDLLFile(config.AgentConfig.Files, arch)
+	archVariants := false
+	for _, f := range config.AgentConfig.Files {
+		if payloadArch(f) != "" {
+			archVariants = true
+			break
+		}
+	}
+	if ctx.Target != nil && archVariants &&
+		(strings.EqualFold(payload_type, "dll") || strings.EqualFold(payload_type, "coff")) {
+		arch := agentArch(ctx)
+		payloadFile = selectArchPayload(config.AgentConfig.Files, arch)
 		hostedName = fmt.Sprintf("%s.%s", strings.ToLower(live.ActiveModule.Name), arch)
 	}
 
 	// Multi-file modules: host every companion file (all entries except the
 	// selected payload) and tell the agent where to cache them in memfs.
-	// Gated by the module's own config.json (module_files_memfs). DLL modules
-	// are excluded — their extra files are per-arch alternatives, not
+	// Gated by the module's own config.json (module_files_memfs). DLL and COFF
+	// modules are excluded — their extra files are per-arch alternatives, not
 	// companions.
-	if config.ModuleFilesMemFS && !strings.EqualFold(payload_type, "dll") {
+	if config.ModuleFilesMemFS && !strings.EqualFold(payload_type, "dll") && !strings.EqualFold(payload_type, "coff") {
 		for _, file := range config.AgentConfig.Files {
 			if file == payloadFile {
 				continue
@@ -191,7 +218,7 @@ func handleInMemoryModule(ctx *c2context.C2Context, config def.ModuleConfig, pay
 	}
 	invB64 := base64.StdEncoding.EncodeToString(invBytes)
 
-	hosted_file := filepath.Join(live.WWWRoot, hostedName+".xz")
+	hosted_file := filepath.Join(live.WWWRoot, hostedName+".gz")
 	logging.Infof("Compressing %s with gzip...", hostedName)
 
 	path := filepath.Join(config.Path, payloadFile)
@@ -241,7 +268,7 @@ func hostModuleFile(moduleName, fileName, path string) (def.ResolvedModuleFile, 
 	base := filepath.Base(fileName)
 	// Unique per module so the agent's memfs cache key (derived from the
 	// basename) cannot collide across modules.
-	hostedBase := fmt.Sprintf("%s.%s.xz", strings.ToLower(moduleName), base)
+	hostedBase := fmt.Sprintf("%s.%s.gz", strings.ToLower(moduleName), base)
 	hostedPath := filepath.Join(live.WWWRoot, hostedBase)
 	if err := os.WriteFile(hostedPath, compressed, 0o600); err != nil {
 		return def.ResolvedModuleFile{}, fmt.Errorf("writing %s: %w", hostedPath, err)
@@ -325,7 +352,7 @@ func handleInteractiveModule(config def.ModuleConfig, job_id string) {
 
 // hostDLLModules compresses and hosts every DLL module's payload so that
 // dependent BOF modules can fetch the correct arch from the C2 file endpoint
-// at runtime. DLL payloads are hosted as <name>.<arch>.xz.
+// at runtime. DLL payloads are hosted as <name>.<arch>.gz.
 func hostDLLModules() {
 	def.Modules.Range(func(_, val any) bool {
 		config, ok := val.(*def.ModuleConfig)
@@ -336,37 +363,121 @@ func hostDLLModules() {
 			return true
 		}
 		for _, file := range config.AgentConfig.Files {
-			arch := dllArch(file)
+			arch := payloadArch(file)
 			if arch == "" {
 				arch = "amd64"
 			}
-			hosted := filepath.Join(live.WWWRoot, fmt.Sprintf("%s.%s.xz", strings.ToLower(config.Name), arch))
-			if util.IsFileExist(hosted) {
-				continue
+			if _, err := hostModulePayload(config, file, arch); err != nil {
+				logging.Warningf("hostDLLModules: %v", err)
 			}
-			path := filepath.Join(config.Path, file)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				logging.Warningf("hostDLLModules: read %s: %v", path, err)
-				continue
-			}
-			compressed, err := util.Compress(data)
-			if err != nil {
-				logging.Warningf("hostDLLModules: compress %s: %v", path, err)
-				continue
-			}
-			if err := os.WriteFile(hosted, compressed, 0o600); err != nil {
-				logging.Warningf("hostDLLModules: write %s: %v", hosted, err)
-				continue
-			}
-			logging.Infof("Hosted DLL module %s as %s", config.Name, hosted)
 		}
 		return true
 	})
 }
 
-// dllArch derives the canonical arch ("amd64" or "386") from a DLL file name.
-func dllArch(file string) string {
+// hostModulePayload compresses payload file of module config into
+// <module>.<arch>.gz under WWWRoot (unless already hosted) and returns the
+// hosted path. The module is not required to be a DLL module; any module with
+// payload files can be hosted this way.
+func hostModulePayload(config *def.ModuleConfig, file, arch string) (string, error) {
+	hosted := filepath.Join(live.WWWRoot, fmt.Sprintf("%s.%s.gz", strings.ToLower(config.Name), arch))
+	if util.IsFileExist(hosted) {
+		return hosted, nil
+	}
+	if err := os.MkdirAll(live.WWWRoot, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", live.WWWRoot, err)
+	}
+	path := filepath.Join(config.Path, file)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	compressed, err := util.Compress(data)
+	if err != nil {
+		return "", fmt.Errorf("compress %s: %w", path, err)
+	}
+	if err := os.WriteFile(hosted, compressed, 0o600); err != nil {
+		return "", fmt.Errorf("write %s: %w", hosted, err)
+	}
+	logging.Infof("Hosted module %s as %s", config.Name, hosted)
+	return hosted, nil
+}
+
+// ensureModuleDependencyHosted makes sure the payload of dependency depName
+// is hosted and downloadable from the C2 file endpoint for the target agent's
+// arch before a module that depends on it is dispatched. hostDLLModules()
+// pre-hosts every DLL module's payload at startup, but hosting can fail
+// silently (payload not built yet, module directory added after startup,
+// WWWRoot recreated), so we host on demand and fail fast instead of letting
+// the agent download a 404.
+//
+// A dependency is an ordinary module with payload files: today BOF
+// dependencies are DLL loader modules ("coffloader"), but nothing in this
+// path assumes a particular payload type.
+func ensureModuleDependencyHosted(ctx *c2context.C2Context, depName string) error {
+	if ctx == nil || ctx.Target == nil {
+		return fmt.Errorf("no target selected")
+	}
+	arch := agentArch(ctx)
+	if arch == "" {
+		return fmt.Errorf("cannot determine target arch (GOArch=%q Arch=%q)", ctx.Target.GOArch, ctx.Target.Arch)
+	}
+	depName = strings.ToLower(depName)
+	hosted := filepath.Join(live.WWWRoot, fmt.Sprintf("%s.%s.gz", depName, arch))
+	if util.IsFileExist(hosted) {
+		return nil
+	}
+
+	// Locate the dependency module config (case-insensitive, module names are
+	// not guaranteed to be lowercase).
+	var config *def.ModuleConfig
+	def.Modules.Range(func(_, val any) bool {
+		c, ok := val.(*def.ModuleConfig)
+		if ok && strings.EqualFold(c.Name, depName) {
+			config = c
+			return false
+		}
+		return true
+	})
+	if config == nil {
+		return fmt.Errorf("dependency module %q is not loaded; install it so dependent modules can fetch it", depName)
+	}
+	if len(config.AgentConfig.Files) == 0 || config.Path == "" {
+		return fmt.Errorf("dependency module %q has no payload files", depName)
+	}
+
+	// Pick the payload for the target arch. Modules may ship per-arch
+	// payloads (COFFLoader.x64.dll / COFFLoader.x86.dll) or a single
+	// arch-agnostic file. selectArchPayload falls back to the first file when
+	// nothing matches, so make sure a mismatched per-arch payload is not
+	// silently served under the wrong arch name.
+	payloadFile := selectArchPayload(config.AgentConfig.Files, arch)
+	if fileArch := payloadArch(payloadFile); fileArch != "" && fileArch != arch {
+		return fmt.Errorf("dependency module %q ships no %s payload (found %s)", depName, arch, fileArch)
+	}
+	_, err := hostModulePayload(config, payloadFile, arch)
+	return err
+}
+
+// agentArch returns the canonical agent arch ("amd64"/"386") of ctx.Target,
+// preferring the agent binary's own GOArch over the OS kernel Arch (a 386
+// agent under WoW64 on x64 Windows reports kernel Arch "x64").
+func agentArch(ctx *c2context.C2Context) string {
+	if ctx == nil || ctx.Target == nil {
+		return ""
+	}
+	agentArch := ctx.Target.GOArch
+	if agentArch == "" {
+		agentArch = ctx.Target.Arch // older agents don't report GOArch yet
+	}
+	return normalizeAgentArch(agentArch)
+}
+
+// payloadArch derives the canonical arch ("amd64" or "386") from a payload
+// file name. It handles DLL loader payloads (COFFLoader.x64.dll) and BOF
+// object files (asktgt.x86.o) alike; returns "" when the name carries no
+// arch marker.
+func payloadArch(file string) string {
 	lower := strings.ToLower(file)
 	switch {
 	case strings.Contains(lower, "x64"), strings.Contains(lower, "amd64"):
@@ -389,11 +500,12 @@ func normalizeAgentArch(arch string) string {
 	return strings.ToLower(arch)
 }
 
-// selectDLLFile picks the DLL payload matching the given canonical arch,
-// falling back to the first file when no match is found.
-func selectDLLFile(files []string, arch string) string {
+// selectArchPayload picks the payload file (DLL loader payload or BOF object)
+// matching the given canonical arch, falling back to the first file when no
+// match is found.
+func selectArchPayload(files []string, arch string) string {
 	for _, file := range files {
-		if dllArch(file) == arch {
+		if payloadArch(file) == arch {
 			return file
 		}
 	}
@@ -420,115 +532,9 @@ func InitModules() {
 		os.MkdirAll(live.WWWRoot, 0o700)
 	}
 
-	load_mod := func(mod_search_dir string) {
-		// don't bother if module dir not found
-		if !util.IsExist(mod_search_dir) {
-			return
-		}
-
-		// Ensure bof_common is in the workspace modules directory if it exists in search dir
-		src_bof_common := filepath.Join(mod_search_dir, "bof_common")
-		dst_bof_common := filepath.Join(live.EmpWorkSpace, "modules", "bof_common")
-		if util.IsExist(src_bof_common) && src_bof_common != dst_bof_common {
-			_ = os.MkdirAll(filepath.Dir(dst_bof_common), 0o700)
-			_ = util.Copy(src_bof_common, dst_bof_common)
-		}
-
-		logging.Debugf("Scanning %s for modules", mod_search_dir)
-		dirs, readdirErr := os.ReadDir(mod_search_dir)
-		if readdirErr != nil {
-			logging.Errorf("Failed to scan custom modules: %v", readdirErr)
-			return
-		}
-		for _, dir := range dirs {
-			if !dir.IsDir() {
-				continue
-			}
-			config_file := fmt.Sprintf("%s/%s/config.json", mod_search_dir, dir.Name())
-			if !util.IsExist(config_file) {
-				continue
-			}
-			configs, readConfigErr := readModConfigs(config_file)
-			if readConfigErr != nil {
-				logging.Warningf("Reading config from %s: %v", dir.Name(), readConfigErr)
-				continue
-			}
-
-			var copiedPath string
-			var hasCopied bool
-
-			for _, config := range configs {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logging.Errorf("Panic while loading module %s: %v. Rolling back registration.", config.Name, r)
-							def.Modules.Delete(config.Name)
-							deleteModuleRunner(config.Name)
-						}
-					}()
-
-					// module path, eg. ~/.emp3r0r/modules/foo
-					originalPath := fmt.Sprintf("%s/%s", mod_search_dir, dir.Name())
-					config.Path = originalPath
-					if config.IsLocal || config.Build != "" {
-						if hasCopied {
-							config.Path = copiedPath
-						} else {
-							mod_dir := filepath.Join(live.EmpWorkSpace, "modules", dir.Name())
-							absConfigPath, _ := filepath.Abs(config.Path)
-							absModDir, _ := filepath.Abs(mod_dir)
-							if absConfigPath == absModDir {
-								logging.Debugf("Module %s is already in workspace, skipping copy", config.Name)
-								copiedPath = mod_dir
-								hasCopied = true
-							} else {
-								err := os.MkdirAll(mod_dir, 0o700)
-								if err != nil {
-									logging.Warningf("Failed to create %s: %v", mod_dir, err)
-									return
-								}
-								err = util.Copy(config.Path, mod_dir)
-								if err != nil {
-									logging.Warningf("Copying %s to %s: %v", config.Path, mod_dir, err)
-									return
-								}
-								config.Path = mod_dir
-								copiedPath = mod_dir
-								hasCopied = true
-							}
-						}
-					}
-
-					// add to module helpers
-					registerModuleRunner(config.Name, moduleCustom)
-
-					// Check for conflicting module names
-					if _, exists := def.Modules.Load(config.Name); exists {
-						logging.Warningf("Conflicting module name: module '%s' is already registered/loaded. The new definition will overwrite it.", config.Name)
-					}
-
-					// Store FIRST so that updateModuleHelp can Load and patch the Options map.
-					// Without this, the Load inside updateModuleHelp always misses and the
-					// validated options are silently discarded.
-					def.InjectTokenOption(config)
-					def.Modules.Store(config.Name, config)
-					readConfigErr = updateModuleHelp(config)
-					if readConfigErr != nil {
-						logging.Warningf("Loading config from %s: %v", config.Name, readConfigErr)
-						def.Modules.Delete(config.Name) // rollback — don't expose a broken entry
-						deleteModuleRunner(config.Name)
-						return
-					}
-					logging.Debugf("Loaded module %s", strconv.Quote(config.Name))
-				}()
-			}
-		}
-	}
-
-	// read from every defined module dir
-	for _, mod_search_dir := range live.ModuleDirs {
-		load_mod(mod_search_dir)
-	}
+	// build the module registries from the same scan, so every loaded config
+	// has a runner and a console command
+	loadModFromDirs()
 
 	// Pre-host DLL modules so BOF module dependencies can download them on
 	// demand even if the operator never ran the DLL module directly.
@@ -540,6 +546,197 @@ func InitModules() {
 		return true
 	})
 	logging.Infof("Loaded %d modules", count)
+}
+
+// scanModuleDirs walks every directory in live.ModuleDirs (in order) and
+// calls handleModuleConfig for each module config found. Modules are loaded
+// from later dirs (the operator workspace) over earlier ones (the install
+// prefix).
+func scanModuleDirs(handleModuleConfig func(dir string) error) {
+	for _, mod_search_dir := range live.ModuleDirs {
+		// don't bother if module dir not found
+		if !util.IsExist(mod_search_dir) {
+			continue
+		}
+		logging.Debugf("Scanning %s for modules", mod_search_dir)
+		dirs, readdirErr := os.ReadDir(mod_search_dir)
+		if readdirErr != nil {
+			logging.Errorf("Failed to scan custom modules in %s: %v", mod_search_dir, readdirErr)
+			continue
+		}
+		for _, dir := range dirs {
+			if !dir.IsDir() {
+				continue
+			}
+			modDir := filepath.Join(mod_search_dir, dir.Name())
+			configFile := filepath.Join(modDir, "config.json")
+			if !util.IsFileExist(configFile) {
+				continue
+			}
+			if err := handleModuleConfig(modDir); err != nil {
+				logging.Warningf("Loading module from %s: %v", modDir, err)
+			}
+		}
+	}
+}
+
+// loadModFromDirs registers every module config found in live.ModuleDirs.
+// It also mirrors the shared bof_common payload into the operator workspace,
+// where buildable/local modules expect it.
+func loadModFromDirs() {
+	// Ensure bof_common is in the workspace modules directory if it exists in
+	// a search dir
+	for _, mod_search_dir := range live.ModuleDirs {
+		src_bof_common := filepath.Join(mod_search_dir, "bof_common")
+		dst_bof_common := filepath.Join(live.EmpWorkSpace, "modules", "bof_common")
+		if util.IsExist(src_bof_common) && src_bof_common != dst_bof_common {
+			_ = os.MkdirAll(filepath.Dir(dst_bof_common), 0o700)
+			_ = util.Copy(src_bof_common, dst_bof_common)
+		}
+	}
+
+	scanModuleDirs(func(dir string) error {
+		_, err := loadModuleDir(dir)
+		return err
+	})
+}
+
+// loadModuleDir parses config.json inside moduleDir and (re)registers the
+// modules it declares, copying the sources of local/buildable modules into
+// the operator workspace first. It returns the parsed module names on
+// success, and an error when the config is unusable (in which case the dir's
+// modules are unregistered so a broken config is never exposed).
+func loadModuleDir(moduleDir string) ([]string, error) {
+	configFile := filepath.Join(moduleDir, "config.json")
+	configs, readConfigErr := readModConfigs(configFile)
+	if readConfigErr != nil {
+		unregisterModuleConfigs(moduleDir)
+		return nil, readConfigErr
+	}
+
+	names := make([]string, 0, len(configs))
+	var copiedPath string
+	var hasCopied bool
+	for _, config := range configs {
+		if err := registerModuleConfig(moduleDir, config, &copiedPath, &hasCopied); err != nil {
+			// the module is broken: unregister it so it is not exposed
+			unregisterModuleConfigs(moduleDir)
+			return nil, err
+		}
+		if config != nil && config.Name != "" {
+			names = append(names, config.Name)
+		}
+	}
+	return names, nil
+}
+
+// registerModuleConfig loads a single module config: resolves its Path
+// (copying local/buildable module sources into the workspace when needed),
+// registers its runner and validates its help text, then stores it.
+// It returns an error when the config is unusable, after rolling back any
+// partial registration.
+func registerModuleConfig(moduleDir string, config *def.ModuleConfig, copiedPath *string, hasCopied *bool) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic while loading module %s: %v", config.Name, r)
+		}
+	}()
+
+	// module path, eg. ~/.emp3r0r/modules/foo
+	config.Path = moduleDir
+	if config.IsLocal || config.Build != "" {
+		if *hasCopied {
+			config.Path = *copiedPath
+		} else {
+			mod_dir := filepath.Join(live.EmpWorkSpace, "modules", filepath.Base(moduleDir))
+			absConfigPath, _ := filepath.Abs(config.Path)
+			absModDir, _ := filepath.Abs(mod_dir)
+			if absConfigPath == absModDir {
+				logging.Debugf("Module %s is already in workspace, skipping copy", config.Name)
+				*copiedPath = mod_dir
+				*hasCopied = true
+			} else {
+				err := os.MkdirAll(mod_dir, 0o700)
+				if err != nil {
+					return fmt.Errorf("failed to create %s: %v", mod_dir, err)
+				}
+				err = util.Copy(config.Path, mod_dir)
+				if err != nil {
+					return fmt.Errorf("copying %s to %s: %v", config.Path, mod_dir, err)
+				}
+				config.Path = mod_dir
+				*copiedPath = mod_dir
+				*hasCopied = true
+			}
+		}
+	}
+
+	// add to module helpers
+	registerModuleRunner(config.Name, moduleCustom)
+
+	// Check for conflicting module names. A plain overwrite (the same module
+	// being (re)loaded — e.g. a workspace shadow of an install-prefix module,
+	// or a hot reload of an edited config) is silent: def.Modules is a
+	// map-like store and the new definition wins by design. Only definitions
+	// that actually differ are worth a warning.
+	if existing, exists := def.Modules.Load(config.Name); exists {
+		if old, ok := existing.(*def.ModuleConfig); ok && !sameModuleDef(old, config) {
+			logging.Warningf("Conflicting module name: module '%s' is already registered/loaded with a different definition. The new definition will overwrite it.", config.Name)
+		}
+	}
+
+	// Store FIRST so that updateModuleHelp can Load and patch the Options map.
+	// Without this, the Load inside updateModuleHelp always misses and the
+	// validated options are silently discarded.
+	def.InjectTokenOption(config)
+	def.Modules.Store(config.Name, config)
+	if helpErr := updateModuleHelp(config); helpErr != nil {
+		def.Modules.Delete(config.Name) // rollback — don't expose a broken entry
+		deleteModuleRunner(config.Name)
+		return fmt.Errorf("%s config error: %v", config.Name, helpErr)
+	}
+	return nil
+}
+
+// sameModuleDef reports whether two configs for the same module name describe
+// the same module (comparing the fields that make a definition unique). It is
+// used to decide whether an overwrite is a reload of the same module (silent)
+// or a genuine name conflict (worth a warning).
+func sameModuleDef(a, b *def.ModuleConfig) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.IsLocal == b.IsLocal &&
+		a.Build == b.Build &&
+		a.Platform == b.Platform &&
+		a.AgentConfig.Type == b.AgentConfig.Type &&
+		a.AgentConfig.Exec == b.AgentConfig.Exec
+}
+
+// unregisterModuleConfigs removes every module whose config lives in moduleDir
+// from def.Modules and from ModuleRunners, and returns the names it removed.
+// It never touches modules that were declared by a later (higher-priority)
+// module dir: the authoritative module dir is read back from the registry
+// itself, so a module that a workspace copy overrides is left alone.
+func unregisterModuleConfigs(moduleDir string) []string {
+	absDir, _ := filepath.Abs(moduleDir)
+	unregister := make([]string, 0)
+	def.Modules.Range(func(key, val any) bool {
+		config, ok := val.(*def.ModuleConfig)
+		if !ok || config == nil {
+			return true
+		}
+		absPath, _ := filepath.Abs(config.Path)
+		if absPath == absDir {
+			unregister = append(unregister, key.(string))
+		}
+		return true
+	})
+	for _, name := range unregister {
+		def.Modules.Delete(name)
+		deleteModuleRunner(name)
+	}
+	return unregister
 }
 
 // readModCondig read config.json of a module

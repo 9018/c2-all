@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -144,9 +143,10 @@ func TestFullAgentLifecycle(t *testing.T) {
 		},
 	}
 
-	// Reset live maps
-	live.AgentControlMap = sync.Map{}
-	live.AgentList = make([]*def.Emp3r0rAgent, 0)
+	// Reset live maps without replacing the sync.Map instance (Clear is safe
+	// with concurrent readers; `= sync.Map{}` would race them).
+	live.AgentControlMap.Clear()
+	live.AgentList.Clear()
 
 	// Initialize agent database for tracking
 	dbPath := filepath.Join(tmpDir, "agents.db")

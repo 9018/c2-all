@@ -19,6 +19,74 @@
 * **web:** "Interactive TTY" button was invisible until an agent was selected;
   it now renders disabled with a hint instead.
 
+## [4.16.0](https://github.com/jm33-m0/emp3r0r/compare/v4.15.0...v4.16.0) (2026-09-06)
+
+
+### Features
+
+* **module:** cifs download ([7e38ec2](https://github.com/jm33-m0/emp3r0r/commit/7e38ec2cc048e814542c2c7952b44459140fca5d))
+* **module:** monitor module dir and dynamically reload modules on-demand ([1328f7a](https://github.com/jm33-m0/emp3r0r/commit/1328f7ac227a7e74106f7c3f85193ecd6e08deee))
+
+
+### Bug Fixes
+
+* improve c2 server shutdown logic ([9b71e6f](https://github.com/jm33-m0/emp3r0r/commit/9b71e6f3141e7010dc881c80793dd5f2b2e09910))
+* **logging:** write logs in plaintext for better parsing compatibility ([0eecd43](https://github.com/jm33-m0/emp3r0r/commit/0eecd4381cad3897d311777901a7a14f2ecccf9b))
+* **module:** promote SA/Remote-OPs BOF to top level command (without prefixes) ([104e105](https://github.com/jm33-m0/emp3r0r/commit/104e105673a9a5394cd5a5595f34b88910e8f9ab))
+
+## [4.15.0](https://github.com/jm33-m0/emp3r0r/compare/v4.14.0...v4.15.0) (2026-09-04)
+
+
+### Features
+
+* **module:** cifs module (file upload and deletion via CIFS) ([d96c479](https://github.com/jm33-m0/emp3r0r/commit/d96c479e52d3439f277b813ea7bf6a8425bee7c1))
+* **module:** SCShell ([e1b81be](https://github.com/jm33-m0/emp3r0r/commit/e1b81be5e0c05a1bfe437078b872f2a6181bf131))
+
+
+### Bug Fixes
+
+* incorrect module parameter caching ([c33e485](https://github.com/jm33-m0/emp3r0r/commit/c33e4852e10fdceb4cd9833bb061213e6117dcce))
+* payload arch selection ([a23503a](https://github.com/jm33-m0/emp3r0r/commit/a23503a719b402a001834db6e9a9898dc4aaeb9f))
+* prepare module dependencies ([6af129c](https://github.com/jm33-m0/emp3r0r/commit/6af129c75056e453b4a2d40fc537e5b5a051426b))
+
+## [4.14.0](https://github.com/jm33-m0/emp3r0r/compare/v4.13.0...v4.14.0) (2026-09-03)
+
+
+### Features
+
+* **socks5:** SOCKS5 pivot relayed through agents ([463b5a3](https://github.com/jm33-m0/emp3r0r/commit/463b5a3c75bfe6bed401aee8a2e8386546a3a4dc))
+* **tun2socks:** integrate `sing-tun` to enable tun2socks on operator side ([be3f58d](https://github.com/jm33-m0/emp3r0r/commit/be3f58db5449acb7b11004f9cb7766d5c79c9098))
+
+
+### Bug Fixes
+
+* **C2:** expand PFS coverage to all possible paths and improve secure conn tunnel ([5d844ea](https://github.com/jm33-m0/emp3r0r/commit/5d844ea3449aeadea1ee54cab334e789eb12f173))
+* cleanup incomplete ([dfcf308](https://github.com/jm33-m0/emp3r0r/commit/dfcf308abe922a4d3f3cd51392209c7bf50c57cd))
+* resolve names too in case own IP gets routed ([8ecf010](https://github.com/jm33-m0/emp3r0r/commit/8ecf010082bb9a50b17cfa72088a49b316625891))
+* **tun2socks:** panic ([cb7d017](https://github.com/jm33-m0/emp3r0r/commit/cb7d017b63a0de67c2fdc8f0147b8ecb1444e219))
+
+## [4.13.0](https://github.com/jm33-m0/emp3r0r/compare/v4.12.2...v4.13.0) (2026-09-02)
+
+
+### Features
+
+* **agent:** structured CBOR listings and --quiet for token/session completion ([36e76a3](https://github.com/jm33-m0/emp3r0r/commit/36e76a3f388f71d0dee535d2f7d9af5dfac87e54))
+* **agent:** wire make_token/import_ticket into agent commands and modules ([8c6e313](https://github.com/jm33-m0/emp3r0r/commit/8c6e31338dc300a24423848667d0906bb9c43618))
+* **driver:** implement Windows kernel driver loading and management ([059064c](https://github.com/jm33-m0/emp3r0r/commit/059064cc04a4ebc72fdaddeab8fa6bb3eeb4fa83))
+* **kkyum:** add kkyum LOL driver module with Starlark entrypoint (demo driver loader) ([de8913e](https://github.com/jm33-m0/emp3r0r/commit/de8913ec108a81dc202589abbf2a8961603c72f1))
+* **module:** implement multi-file module support with companion file caching in memfs ([a7299a3](https://github.com/jm33-m0/emp3r0r/commit/a7299a3428358b4963aa7e29ca7cdeff8fffc676))
+* **priv:** implement make_token netlogon sessions and Kerberos ticket import ([7f79f9a](https://github.com/jm33-m0/emp3r0r/commit/7f79f9a6b298f11f771becbdd03655f9da4ea560))
+* **SA:** detailed error reporting in starlark modules; add starlarkrunner ([b5fc1d3](https://github.com/jm33-m0/emp3r0r/commit/b5fc1d3174951a1e744bb698e0cddb33007a9708))
+* **script:** add Starlark bindings for Windows driver and DLL reflective loading APIs ([04b5ec9](https://github.com/jm33-m0/emp3r0r/commit/04b5ec9461b1bdf05167ee791b51a1feb6888355))
+* **syscall:** add SilentMoonwalk call-stack spoofing via cgo ([fb220ad](https://github.com/jm33-m0/emp3r0r/commit/fb220ad08a70b1c762ff4df2d5b8e434221e76b7))
+
+
+### Bug Fixes
+
+* **make_token:** netonly PTT container, atomic session-name and token fixes ([5c6b1ca](https://github.com/jm33-m0/emp3r0r/commit/5c6b1caf1412ea11f7f3372c4d82180e5ec10f46))
+* **priv:** `\` escaping issue and command suggestion inconsistency ([bce4665](https://github.com/jm33-m0/emp3r0r/commit/bce4665c47b70096776f6e8aa2d714eadaa3d0fb))
+* **syscall:** disable SilentMoonwalk in cgo builds, use pure-Go syscall path ([8214b43](https://github.com/jm33-m0/emp3r0r/commit/8214b4358b729e4afbe7ca764625a396b6fb6edc))
+
 ## [4.12.2](https://github.com/jm33-m0/emp3r0r/compare/v4.12.1...v4.12.2) (2026-08-26)
 
 

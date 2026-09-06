@@ -50,10 +50,19 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 	if logging.Level >= 4 {
 		logging.Debugf("handleMessageTunnel: stream start uuid=%s remote=%s", initialAgentUUID, remoteAddr)
 	}
+	// Track PFS state for this connection
+	var (
+		pfsEstablished    bool
+		establishedPFSKey []byte // current ephemeral session key of this tunnel
+	)
 	var wg sync.WaitGroup
 	defer func() {
 		logging.Debugf("handleMessageTunnel exiting")
 		cancel() // Signal goroutine to stop
+		// Drop the ephemeral PFS key before tearing the session down. Guarded by
+		// key equality so the teardown of this tunnel never wipes a newer session
+		// key that may have been negotiated by a racing reconnect.
+		forgetPFSSessionKey(authAgentUUID, establishedPFSKey)
 		// Close the connection BEFORE waiting for the read goroutine.
 		// The goroutine blocks on dec.Decode() reading from this conn, so
 		// without closing first wg.Wait() would deadlock until the agent
@@ -91,8 +100,6 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 		}
 		logging.Debugf("handleMessageTunnel exited")
 	}()
-	// Track PFS state for this connection
-	var pfsEstablished bool
 
 	wg.Go(func() {
 		defer cancel()
@@ -257,27 +264,39 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 			if shortname == "" {
 				shortname = agent.Tag
 			}
-			var ctrl *live.AgentControl
+			// Publish control state as an immutable snapshot. The *live.AgentControl
+			// values in AgentControlMap are shared with readers that run outside
+			// this goroutine (operator agent list, SOCKS5 pivot startup, message
+			// tunnel teardown, SendMessageToAgent, ...). Mutating a stored value in
+			// place would race those readers, so copy the current snapshot, update
+			// the copy, and publish it: sync.Map then hands every Load/Range a
+			// consistent, never-mutated value.
+			var published *live.AgentControl
 			if val, ok := live.AgentControlMap.Load(agent); ok {
-				ctrl = val.(*live.AgentControl)
+				cur := val.(*live.AgentControl)
+				if cur.Conn == nil {
+					operatorBroadcastPrintf(logging.SUCCESS,
+						"Knock.. Knock... Agent %s is connected",
+						strconv.Quote(shortname))
+				}
+				cp := *cur
+				published = &cp
 			} else {
-				ctrl = &live.AgentControl{Index: agents.AssignAgentIndex()}
-			}
-			if ctrl.Conn == nil {
 				operatorBroadcastPrintf(logging.SUCCESS,
 					"Knock.. Knock... Agent %s is connected",
 					strconv.Quote(shortname))
+				published = &live.AgentControl{Index: agents.AssignAgentIndex()}
 			}
 			now := time.Now()
 			agents.MarkAgentSeen(agent, now)
 			if logging.Level >= 4 {
 				logging.Debugf("handleMessageTunnel: authenticated frame uuid=%s tag=%q cmd=%d resp=%d job=%q", authAgentUUID, msg.Tag, len(msg.CmdSlice), len(msg.Response), msg.JobID)
 			}
-			// Update control info and publish via Store to ensure memory visibility
-			ctrl.Conn = secureConn
-			ctrl.Ctx = ctx
-			ctrl.Cancel = cancel
-			live.AgentControlMap.Store(agent, ctrl)
+			// Update the copy and publish it to ensure memory visibility.
+			published.Conn = secureConn
+			published.Ctx = ctx
+			published.Cancel = cancel
+			live.AgentControlMap.Store(agent, published)
 
 			// Any authenticated frame (keep-alive hello OR command response)
 			// proves the agent is still alive, so refresh the handshake timer
@@ -316,6 +335,14 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 					return
 				}
 
+				// Register the ephemeral PFS session key for this agent BEFORE
+				// replying: auxiliary streams (FTP/WWW/proxy) the agent opens right
+				// after the handshake are re-keyed to it by the dispatcher.
+				if sessionKey != nil {
+					establishedPFSKey = sessionKey
+					rememberPFSSessionKey(authAgentUUID, sessionKey)
+				}
+
 				// respond with Server Public Key (or random data), wrapped in MsgTunData
 				replyMsg := def.MsgTunData{
 					JobID:    msg.JobID,
@@ -326,14 +353,11 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 				err = encoder.Encode(replyMsg)
 				if err == nil {
 					if sessionKey != nil {
-						// 6. Switch to Session Key (only if exchange was successful)
+						// 6. Switch to Session Key (only the initial exchange can yield
+						// one — mid-session re-key offers are rejected upstream).
 						secureConn.SetKey(sessionKey)
-						if !pfsEstablished {
-							logging.Infof("SecureConn: Switched to ephemeral session key for %s (PFS enabled)", msg.Tag)
-							pfsEstablished = true
-						} else {
-							logging.Debugf("SecureConn: Re-keyed ephemeral session key for %s", msg.Tag)
-						}
+						logging.Infof("SecureConn: Switched to ephemeral session key for %s (PFS enabled)", msg.Tag)
+						pfsEstablished = true
 					}
 
 					// Only push PeerList to TRUSTED agents (must have established PFS)
@@ -361,8 +385,12 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 
 				// Issue AgentToken if missing or expiring within 6 hours.
 				// Trust condition: agent has a live MsgTun session (checked-in + communicating).
-				needsToken := agent.AgentToken == nil ||
-					time.Until(time.Unix(agent.AgentToken.ExpiresAt, 0)) < 6*time.Hour
+				// The issued token is cached by UUID (agents.AgentTokenFor) instead of
+				// being stored on the shared agent object: this goroutine must not
+				// mutate an AgentControlMap key that other goroutines snapshot.
+				curToken := agents.AgentTokenFor(authAgentUUID)
+				needsToken := curToken == nil ||
+					time.Until(time.Unix(curToken.ExpiresAt, 0)) < 6*time.Hour
 				if needsToken {
 					tok, err := SignAgentToken(agent.UUID, agent.From, def.CapabilityProxy, 24*time.Hour)
 					if err != nil {
@@ -377,7 +405,7 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 							logging.Errorf("handleMessageTunnel: send AgentToken to %s: %v", agent.Name, err)
 						} else {
 							logging.Infof("Sent AgentToken(cap=proxy) to %s", agent.Name)
-							agent.AgentToken = tok
+							agents.StoreAgentToken(authAgentUUID, tok)
 						}
 					}
 				}
@@ -404,6 +432,11 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 					})
 					continue
 				}
+				// Job responses whose IDs belong to the CC-internal SOCKS5 pivot
+				// are consumed by the socks manager (via live.CmdResultsReady) and
+				// are never owned by an operator session — do not treat their
+				// arrival as an operator-facing problem.
+				socksInternal := strings.HasPrefix(msg.JobID, socksProxyTokenPrefix)
 				if _, knownJob := live.CmdTime.Load(msg.JobID); knownJob {
 					responseToCache := msg.Response
 					if len(responseToCache) > maxCmdResultCacheBytes {
@@ -423,7 +456,7 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 						"Response": string(responseToCache),
 						"AgentTag": msg.Tag,
 					})
-				} else {
+				} else if !socksInternal {
 					logging.Warningf("handleMessageTunnel: dropping response for unknown job ID %s", strconv.Quote(msg.JobID))
 				}
 
@@ -437,6 +470,10 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 							logging.Warningf("handleMessageTunnel: targeted relay failed for job %s owner %s: %v", strconv.Quote(msgCopy.JobID), strconv.Quote(ownerSession), relayErr)
 						}
 					}()
+					continue
+				}
+				if socksInternal {
+					logging.Debugf("handleMessageTunnel: SOCKS5 pivot dial failure for job %s", strconv.Quote(msg.JobID))
 					continue
 				}
 				logging.Warningf("CRITICAL: no operator owner for job response %s from agent %s", strconv.Quote(msg.JobID), strconv.Quote(authAgentUUID))

