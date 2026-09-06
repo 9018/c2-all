@@ -81,3 +81,25 @@ CC kill → agent 1s 内收到 4001 cc-gone（不再挂死）→ agent 退避重
 `relayConn.startPinger()`：每 30s WS ping 控制帧（gorilla `WriteControl`，并发安全），
 防止 CF 边缘把空闲 WebSocket 当 idle 连接回收（曾观测 ~19-30min 1006）。
 DO 的 accept() socket 由 CF 运行时自动回 pong。
+
+### 会话死锁修复（duplicate-session starvation，2026-09-07）
+
+CC 重启/隧道抖动（1006）后 agent 可能被永久锁在门外：
+- 旧会话行只靠隧道帧刷新心跳，隧道静默死亡后行仍"新鲜"（15 分钟 stale 窗口）
+- 同进程（同 epoch）重连 checkin 被判 `forbidden: duplicate session` 拒绝
+- CC 出错不回 ACK，agent 的 ACK 等待无超时 → 永久挂死（实测挂 10 分钟）
+
+三层修复：
+1. `StartSession`（agentdb.go）：同 epoch 旧会话心跳静默 >3 分钟（sessionLiveWindow）
+   视为死会话，允许接管。安全性：checkin 在会话准入**之前**已通过 pinned 公钥
+   签名验证，来者即同一身份；真正并发的克隆会话有心跳，仍被拒绝。
+2. `dispatcher.go`：checkin 失败时回 `checkin-error` ACK（此前静默丢弃）。
+3. `poll.go`（agent）：checkin ACK 等待加 60s 超时，超时后走退避重试。
+
+## 部署与测试环境（2026-09-07 快照）
+- 生产 relay：`emp3r0r-cf-relay` Worker（双自定义域名，room-a/room-b，role=cc）
+- 本地开发测试：`npx wrangler dev --port 8806 --var EMP_SHARED_SECRET:testsec`
+  （`go test ./internal/transport/` 的 E2E 测试依赖它）
+- 前端：React UI 由 CC 直接 serve `~/.emp3r0r/web/`（改前端后 `npm run build`
+  并拷贝 dist 即可，无需重编 CC）
+- 源码仓库：github.com/9018/c2-all（分支 `v4` = 本项目，`cf-relay` = Worker）

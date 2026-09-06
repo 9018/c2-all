@@ -19,6 +19,27 @@
 * **web:** "Interactive TTY" button was invisible until an agent was selected;
   it now renders disabled with a hint instead.
 
+### Features (cont.)
+
+* **relay:** Cloudflare Worker + Durable Object WebSocket rendezvous transport
+  (`worker_ws` mode) — CC and agents both dial `wss://<relay>/ws/<room>`;
+  30s keepalive pings, CC-presence gating (`hello.cc`), `cc-gone` cascade
+  close, supervise() with exp backoff; `genagent --relay` builds relay agents
+  with DoH through the relay Worker. See `RELAY_DESIGN.md`. Upstream v4.16.0
+  merged (conflicts resolved: PTY broadcast + SOCKS5 pivot filtering coexist).
+
+### Bug Fixes (cont.)
+
+* **web:** page refresh restored the token state from localStorage but never
+  re-synced it into the API client — every REST call 401'd until manual
+  re-login. Fixed in store initialization.
+* **web/api:** forgetting the active agent left a dangling `activeAgent`
+  (server `live.ActiveAgent` pointer + client state) — Console/PTY silently
+  targeted a deleted agent. Both layers now reset on forget.
+* **cc/agent:** duplicate-session deadlock — see `RELAY_DESIGN.md`
+  (silent-session takeover after 3min heartbeat silence, checkin-error ACK,
+  60s ACK timeout on the agent).
+
 ## [4.16.0](https://github.com/jm33-m0/emp3r0r/compare/v4.15.0...v4.16.0) (2026-09-06)
 
 
