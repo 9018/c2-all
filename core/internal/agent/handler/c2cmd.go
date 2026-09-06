@@ -119,6 +119,9 @@ func C2Commands() *cobra.Command {
 	fileDownloaderCmd.Flags().StringP("checksum", "c", "", "Checksum")
 	rootCmd.AddCommand(fileDownloaderCmd)
 
+	// Interactive PTY shell session (web console virtual terminal)
+	registerShellCmd(rootCmd)
+
 	platformCommands(rootCmd)
 
 	return rootCmd

