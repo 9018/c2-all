@@ -1,10 +1,9 @@
 name = "emp3r0r-cf-relay"
 main = "src/worker.js"
+workers_dev = false
+routes = [ { pattern = "relay.ubx1ujnzri.kdns.fr/*", zone_id = "b5862c93897117dd67d5e38c8f291367" } ]
 compatibility_date = "2025-03-01"
-account_id = "cc104f6c48f68ba1dd6d2049d5cef6bc"
 
-# ---------- Durable Object 绑定 ----------
-# 每个房间 (room id) 一个 DO 实例做字节管道
 [[durable_objects.bindings]]
 name = "RELAY_DO"
 class_name = "RelayDO"
@@ -13,20 +12,5 @@ class_name = "RelayDO"
 tag = "v1"
 new_sqlite_classes = ["RelayDO"]
 
-# ---------- 共享密钥 ----------
-# 用 `wrangler secret put EMP_SHARED_SECRET` 设置（不要写进本文件）
-# agent / cc 连接时带 ?secret=<同一个值> 或 Authorization: Bearer <值>
-
-# ---------- 自定义域名路由（可选） ----------
-# 每个账号/域名一组 routes；多账号分布式时每账号部署一份 worker + 一条 route
-# routes = [
-#   { pattern = "relay.example.com", custom_domain = true },
-# ]
-
 [observability]
 enabled = false
-
-# Custom domain (avoids *.workers.dev SNI blocking); zone on this account
-routes = [
-  { pattern = "relay.at7ublkkc3.kdns.fr", custom_domain = true }
-]

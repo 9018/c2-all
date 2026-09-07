@@ -165,3 +165,62 @@ relay.at7ublkkc3` → `DoH re-homed` → `Checked in (verified by server)` → A
 
 CC 侧零改动。剩余短板：双 worker 仍在同一 CF 账号（账号封禁=双杀），彻底冗余需双账号
 部署同一 Worker（纯运维动作）。
+
+## DO Hibernation 重写 — 计费根因修复（2026-09-08，新账号部署 E2E 全通）
+
+### 根因：不是基础设施，是计费模式
+
+旧版 DO 用 `server.accept()` + 内存 Map（`this.cc` / `this.agents` / `this.meta`）。
+`accept()` 模式下 socket 生命周期锚定 DO 内存驻留：只要有连接（哪怕完全空闲），
+DO 就 24/7 活跃。Duration 按 **128MB × 墙钟** 计费：免费额度 ~13,000 GB-s/月
+只够一个常驻对象活 ~29 小时——**一天的空闲 socket 就烧穿整月配额**，之后
+全账号所有 DO 调用 500 直到月初重置。GraphQL 分析证实：本月 DO 调用 147 次、
+141 次报错；连一个 `WebSocketPair()` 最小测试 Worker 都 500，看起来极像
+"CF DO 基础设施坏了"，实为账号级配额熔断。
+
+### 修复：Hibernation API 重写（`cf-relay/src/relay_do.js`）
+
+- `ctx.acceptWebSocket(ws, [tags])` 替代 `server.accept()`：空闲时 DO 从内存逐出，
+  socket 由 CF edge 维持；**空闲 = 零 duration 计费**，仅在消息到达时唤醒。
+- 状态全部"可重建"：每次唤醒从 `getWebSockets()` + 附件 + storage 重新派生——
+  - 每 socket 的 `{role, tag}` 元数据走 `serializeAttachment()`/`deserializeAttachment()`
+    （实测：`ws.tags` 属性**不存在**，这是唯一跨休眠存活的 per-socket 通道）；
+  - CC 存活标记 `ccAlive` 存 storage——close 事件里 runtime 可能已把 socket
+    从 tag 索引摘除，membership 不可靠；
+  - agent 计数器 `nextTag` 存 storage，跨逐出/重启 tag 不冲突。
+- `setWebSocketAutoResponse(ping/pong)`：固定请求/响应对由 edge 直接应答，
+  不唤醒 DO。Go 侧保活本来就是 WS 协议层 ping（edge 自动应答，同样免唤醒）。
+- 事件驱动：`webSocketMessage` / `webSocketClose` / `webSocketError` 类方法
+  替代 `addEventListener`。
+- 线协议**零改动**（Go 两侧不用动）：hello/agent-joined/agent-left 文本帧、
+  agent→CC `[tagByte][payload]`、CC→agent 定向/`0xFF` 广播、cc-gone 4001 清扫、
+  superseded 4000。
+
+### 验证（新 CF 账号，全部通过）
+
+协议回归 16/16：hello、tag 帧封装、定向、广播、双 agent、agent-left、cc-gone 清扫、
+**75s 休眠窗口后**重新加入（fresh tag）+ 双向路由恢复。真机 E2E：agent 经
+`relay.ubx1ujnzri.kdns.fr` checkin（PFS + AgentToken），立即命令与
+**90s 休眠后命令**均正常执行（`HIBERNATION_LIVE` → `POST_HIB`）。
+
+### 新账号部署要点（踩坑记录）
+
+- **workers.dev 子域名是硬门槛**：账号没有它时，`wrangler deploy` 与 CF API
+  （哪怕 `workers_dev=false` + routes）一律 10063 拒绝。**绕法**：
+  `PUT /accounts/{id}/workers/subdomain` `{"subdomain":"名字"}` 直接注册——
+  不需要 dashboard（本文档实测，Token 需 Workers Scripts Write）。
+- 路由：wrangler.toml `routes = [{pattern="relay.<域>/*", zone_id=...}]` +
+  同名 proxied A 记录（占位 IP 即可，`192.0.2.1`）。token 的 zone scope 必须
+  覆盖目标 zone（本 token 只有 ubx1ujnzri，cr6kifimf5 的 route/DNS 均无权限）。
+- 跨 zone 域名级冗余（relay 挂两个不同 zone）：`workers/domains` API 拒绝 API
+  token（10405），需 dashboard 操作或扩 token scope——暂以**同域双 room**
+  （room-a/room-b = 两个独立 DO 实例）作 DO 级冗余。
+- 老账号（cc104f6c…）9 月配额已烧穿，WS 500 至 10/1 重置；Hibernation 版已
+  部署过去，重置后即恢复。旧域名（at7ublkkc3/ea3vmj2vjp）DNS 仍指向老账号。
+
+### 当前部署快照（2026-09-08）
+
+- 生产 relay：`relay.ubx1ujnzri.kdns.fr`（新账号 f8b31eff…，workers.dev 子域
+  `emp-relay-f8b3`，Worker `emp3r0r-cf-relay`，room: prod-room-a / prod-room-b）
+- `~/.emp3r0r/emp3r0r.json` 的 `relay_urls` 已切到新域名（role=cc）
+- 老 relay Worker 同源码已部署老账号（10/1 配额重置后自动可用）
