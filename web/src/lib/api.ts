@@ -58,6 +58,11 @@ class ApiClient {
     })
   }
 
+  // CF relay Worker quota panel
+  async getRelayQuota(): Promise<any> {
+    return this.request<any>('/relay-quota')
+  }
+
   async sendCommand(operation: Operation): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useStore } from '@/stores/useStore'
+import { RelayQuotaCard } from '@/components/RelayQuotaCard'
 import { 
   Monitor, 
   Shield, 
@@ -105,6 +106,11 @@ export function Dashboard() {
           value={`${linuxAgents.length}L/${windowsAgents.length}W`}
           color="text-blue-500"
         />
+      </div>
+
+      {/* CF Relay Worker quota (free-plan burn-down) */}
+      <div className="mb-4 md:mb-6">
+        <RelayQuotaCard />
       </div>
 
       {/* Two Column Layout */}

@@ -146,6 +146,9 @@ func InitWebServer(port int) {
 	
 	// 命令 API
 	authApi.HandleFunc("/command", handleWebSendCommand).Methods("POST")
+
+	// CF relay 用量面板（Workers/DO 免费配额燃烧度）
+	authApi.HandleFunc("/relay-quota", handleWebRelayQuota).Methods("GET")
 	
 	// 文件管理 API
 	authApi.HandleFunc("/ls", handleWebListFiles).Methods("POST")

@@ -224,3 +224,20 @@ DO 就 24/7 活跃。Duration 按 **128MB × 墙钟** 计费：免费额度 ~13,
   `emp-relay-f8b3`，Worker `emp3r0r-cf-relay`，room: prod-room-a / prod-room-b）
 - `~/.emp3r0r/emp3r0r.json` 的 `relay_urls` 已切到新域名（role=cc）
 - 老 relay Worker 同源码已部署老账号（10/1 配额重置后自动可用）
+
+## Relay 用量面板（2026-09-08，前端可见的配额燃烧度）
+
+上次配额烧穿的教训：免费配额是隐形的，烧穿后全账号 DO 500，排查极难。
+现在 Web 面板 Dashboard 顶部有 "Relay Worker Quota" 卡片，实时显示（CF GraphQL
+analytics，60s 缓存 + 手动刷新）：
+
+- **Workers requests（日 / 10 万）**：`workersInvocationsAdaptive`
+- **DO requests（月 / 10 万）**：`durableObjectsInvocationsAdaptiveGroups`
+- **DO duration（月 GB-s / 1.3 万）**：`durableObjectsPeriodicGroups.sum.activeTime`
+  （μs × 0.125GB 换算）——正是旧版常驻写法一天烧穿的维度
+- DO 错误数（红字）+ 数据截至日期（CF 聚合延迟数小时）
+
+凭据放 `~/.emp3r0r/cf_relay.json`（不入库）：
+`{"api_token": "cfut_...", "account_id": "..."}`；API：`GET /api/relay-quota`。
+当前实测：DO 全月仅 0.08 GB-s（旧版常驻一天 ≈ 10,800 GB-s）——Hibernation
+改写的收益直接可见。
