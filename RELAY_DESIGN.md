@@ -139,3 +139,29 @@ CC 重启/隧道抖动（1006）后 agent 可能被永久锁在门外：
 - 前端：React UI 由 CC 直接 serve `~/.emp3r0r/web/`（改前端后 `npm run build`
   并拷贝 dist 即可，无需重编 CC）
 - 源码仓库：github.com/9018/c2-all（分支 `main`；Worker 源码在仓库内 `cf-relay/` 目录）
+
+## 多端点 failover（2026-09-07 实现，方案 B 落地）
+
+背景：CC 侧本就支持 N 条出站 relay 隧道（`relay_urls` 每条一个 listener goroutine），
+genagent 构建时也把完整 agent 端点列表（role=cc→role=agent 交换）嵌进了 agent 二进制，
+但 agent 只认单个 `CCAddress`——relay 域名被烧时在线舰队全体变砖，双隧道沦为摆设。
+
+三层修复（agent 侧）：
+
+1. **端点轮换**（`connector.go nextRelayEndpoint`）：任何 relay 拨号失败时，在嵌入列表
+   （仅 `role=agent` URL）内循环轮换 `def.CCAddress`；直接连接模式 / 单端点 / CC-role
+   列表一律不轮换。所有端点背后是同一个 CC，端点身份纯属传输层，会话/密钥/路由不受影响。
+2. **DoH 随迁**（`connector.go rotateDoH`）：genagent 把 DoH 钉在第一个端点同域的
+   `/dns` 路由上——域名被烧则 DoH 陪葬，连 failover 目标都解析不了。轮换时若 DoH
+   与失败端点同域，同步重定向到新端点的 `/dns?secret=` 路由。
+3. **DoH bootstrap 降级**（`cmd/agent/agent.go`）：`NewDoHResolver` 需要真解析 DoH
+   服务器自身域名（bootstrap），失败会返回 nil；原代码把 nil 赋给 `net.DefaultResolver`
+   导致后续拨号 panic（agent 变砖）。现在降级到系统 DNS 并告警。
+
+真机验证：agent 嵌入 [dead.invalid, room-a(真), room-b(真)] 三端点，启动日志依次出现
+`DoH bootstrap failed → falling back to system DNS` → `failing over: dead.invalid →
+relay.at7ublkkc3` → `DoH re-homed` → `Checked in (verified by server)` → AgentToken，
+全程零操作员介入。测试：`TestNextRelayEndpoint` / `TestRotateDoH`；全仓 44 包测试通过。
+
+CC 侧零改动。剩余短板：双 worker 仍在同一 CF 账号（账号封禁=双杀），彻底冗余需双账号
+部署同一 Worker（纯运维动作）。

