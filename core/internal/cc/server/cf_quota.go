@@ -41,6 +41,11 @@ type cfQuotaResponse struct {
 	// false when cf_relay.json is missing/incomplete
 	Configured bool `json:"configured"`
 
+	// shown in the web card so the operator can see (and copy) which
+	// credentials the quota panel is using
+	APIToken  string `json:"api_token,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+
 	Workers struct {
 		RequestsToday     int64 `json:"requests_today"`
 		ErrorsToday       int64 `json:"errors_today"`
@@ -204,6 +209,8 @@ func fetchCFQuota(cfg *cfRelayConfig) (*cfQuotaResponse, error) {
 	}
 
 	out := &cfQuotaResponse{Configured: true, FetchedAt: time.Now()}
+	out.APIToken = cfg.APIToken
+	out.AccountID = cfg.AccountID
 	out.Limits.WorkersRequestsPerDay = cfLimitWorkersRequestsPerDay
 	out.Limits.DORequestsPerMonth = cfLimitDORequestsPerMonth
 	out.Limits.DOGBSecondsPerMonth = cfLimitDOGBSecondsPerMonth

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Cloud, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Cloud, RefreshCw, AlertTriangle, Key, Copy } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface RelayQuota {
   configured: boolean
+  api_token?: string
+  account_id?: string
   workers: {
     requests_today: number
     errors_today: number
@@ -30,6 +32,12 @@ function pctColor(pct: number): string {
   if (pct >= 85) return 'from-red-600 to-red-500'
   if (pct >= 60) return 'from-yellow-600 to-yellow-500'
   return 'from-green-600 to-green-500'
+}
+
+function maskToken(token: string): string {
+  // cfut_xxxx…xxxx — short form for the row, full value on click-to-copy
+  if (token.length <= 14) return token
+  return `${token.slice(0, 10)}…${token.slice(-4)}`
 }
 
 function Bar({ label, value, limit, unit }: { label: string; value: number; limit: number; unit: string }) {
@@ -144,6 +152,28 @@ export function RelayQuotaCard() {
               data as of {quota.data_date || '—'}
             </span>
           </div>
+          {(quota.api_token || quota.account_id) && (
+            <div className="flex items-center gap-2 text-xs text-gray-600 pt-1 border-t border-gray-800/60 mt-1 pt-2">
+              <Key className="w-3 h-3 shrink-0" />
+              <span className="font-mono truncate" title={`account: ${quota.account_id || ''}`}>
+                {quota.account_id}
+              </span>
+              <button
+                onClick={() => navigator.clipboard?.writeText(quota.api_token || '')}
+                className="font-mono text-gray-500 hover:text-gray-300 truncate transition-colors"
+                title={`token: ${quota.api_token}\n(click to copy)`}
+              >
+                {maskToken(quota.api_token || '')}
+              </button>
+              <button
+                onClick={() => navigator.clipboard?.writeText(quota.api_token || '')}
+                className="p-1 hover:bg-gray-800 rounded shrink-0 transition-colors"
+                title="Copy API token"
+              >
+                <Copy className="w-3 h-3" />
+              </button>
+            </div>
+          )}
           {quota.error && (
             <p className="text-xs text-yellow-500 flex items-start gap-1">
               <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
