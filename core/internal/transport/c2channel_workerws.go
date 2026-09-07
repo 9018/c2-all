@@ -14,7 +14,6 @@ package transport
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	utls "github.com/refraction-networking/utls"
 )
 
 // RelayRoomMsg is the JSON hello/control frame exchanged over the relay WS.
@@ -54,17 +54,45 @@ func init() {
 
 // ---- shared plumbing --------------------------------------------------------
 
+// dialRelayTLS dials TCP and completes a uTLS handshake for relay WSS
+// connections (both agent and CC sides).
+//
+// Browser-mimicking ClientHellos (Chrome/Firefox/IOS) are deliberately
+// excluded: they advertise ALPN h2, and if the edge negotiates h2 the
+// HTTP/1.1 WebSocket upgrade that follows would break. Instead we use
+// HelloRandomizedNoALPN — a fresh random JA3 per connection (no stable Go
+// fingerprint), and no ALPN extension means the server defaults to
+// HTTP/1.1, which is exactly what the WS upgrade speaks.
+func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
+	// Independent dialer: the agent may replace net.DefaultResolver with a
+	// DoH resolver whose upstream is unreachable in relay-only networks;
+	// relay endpoints must resolve via plain system DNS.
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("relay TLS dial: bad addr %q: %w", addr, err)
+	}
+	// CF public cert chain is verified by the system pool (InsecureSkipVerify
+	// stays false; a pinned CA is unnecessary — the endpoint is a CF domain).
+	uconn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloRandomizedNoALPN)
+	if err := uconn.Handshake(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("relay TLS handshake %s: %w", host, err)
+	}
+	return uconn, nil
+}
+
 var relayDialer = &websocket.Dialer{
 	HandshakeTimeout: 15 * time.Second,
-	TLSClientConfig:  &tls.Config{InsecureSkipVerify: false}, // pinned CA not needed: CF public cert
-	ReadBufferSize:   1 << 16,
-	WriteBufferSize:  1 << 16,
-	// Agent may replace net.DefaultResolver with a DoH resolver whose upstream
-	// is unreachable from inside a relay-only network. Relay endpoints must
-	// resolve via plain system DNS, so pin an independent dialer here.
-	NetDialContext: (&net.Dialer{
-		Timeout: 10 * time.Second,
-	}).DialContext,
+	// NetDialTLSContext: gorilla skips its own TLS handshake and uses the
+	// connection we return — a *utls.UConn with a randomized ClientHello.
+	NetDialTLSContext: dialRelayTLS,
+	ReadBufferSize:    1 << 16,
+	WriteBufferSize:   1 << 16,
 }
 
 // relayConn adapts a websocket to net.Conn-ish io.ReadWriteCloser.

@@ -77,6 +77,13 @@
 CC kill → agent 1s 内收到 4001 cc-gone（不再挂死）→ agent 退避重连循环（dialRelay 等 CC 在场）
 → CC 重启 → agent 36s 后全自动 checkin + message tunnel + PFS 重建，零人工干预。
 
+### WSS 出站 TLS 混淆（2026-09-07）
+relay WSS 出站握手不再用 Go 默认指纹：`dialRelayTLS`（c2channel_workerws.go）通过
+gorilla 的 `NetDialTLSContext` 完成 uTLS 握手，ClientHello 用 `HelloRandomizedNoALPN`——
+每次连接生成全新随机 JA3（无稳定 Go 指纹可抓）。浏览器指纹（Chrome/Firefox）被刻意排除：
+它们的 ALPN 含 h2，若边缘协商 h2 会破坏后续 HTTP/1.1 WS 升级；无 ALPN 即默认 HTTP/1.1。
+注意：本地 `go test ./internal/transport/` 走 ws://（无 TLS），uTLS 路径仅对生产 wss 生效。
+
 ### 保活
 `relayConn.startPinger()`：每 30s WS ping 控制帧（gorilla `WriteControl`，并发安全），
 防止 CF 边缘把空闲 WebSocket 当 idle 连接回收（曾观测 ~19-30min 1006）。
