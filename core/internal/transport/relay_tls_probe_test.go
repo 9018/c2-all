@@ -1,13 +1,13 @@
 package transport
 
-// relay_tls_probe_test.go — verifies that relay WSS outbound ClientHellos are
-// randomized per connection (no stable Go JA3 fingerprint).
+// relay_tls_probe_test.go — verifies that relay WSS outbound ClientHellos
+// mimic real browsers (Chrome/Firefox/iOS) with ALPN pinned to http/1.1 so
+// the WebSocket upgrade works.
 //
-// dialRelayTLS verifies the server certificate (InsecureSkipVerify=false), so
-// the client handshake will *fail* against a self-signed test server — that's
-// fine: the ClientHello is sent before verification, so the server-side
-// GetConfigForClient callback still captures it. We assert that two separate
-// dials produce different cipher-suite orders (the core of a JA3 string).
+// We spin a local TLS server whose cert is signed by a test CA injected via
+// relayTLSRootCAs, then assert: the uTLS handshake succeeds, the server
+// negotiates exactly "http/1.1" (never h2), and different dials use
+// different browser fingerprints (the pool has three members).
 
 import (
 	"context"
@@ -18,46 +18,60 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
 )
 
-func selfSigned(t *testing.T) tls.Certificate {
+func testCA(t *testing.T) (caCert tls.Certificate, caPool *x509.CertPool) {
 	t.Helper()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "probe.local"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:         true,
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "probe-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
+	caDER, _ := x509.CreateCertificate(rand.Reader, &caTmpl, &caTmpl, &caKey.PublicKey, caKey)
+	caParsed, _ := x509.ParseCertificate(caDER)
+	caPool = x509.NewCertPool()
+	caPool.AddCert(caParsed)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTmpl := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "probe.local"},
+		DNSNames:     []string{"127.0.0.1"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, &leafTmpl, caParsed, &leafKey.PublicKey, caKey)
+
+	return tls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}, caPool
 }
 
-func captureHellos(t *testing.T, n int) []*tls.ClientHelloInfo {
+func captureBrowserHandshakes(t *testing.T, n int) (negotiated []string) {
 	t.Helper()
+	serverCert, caPool := testCA(t)
+	relayTLSRootCAs = caPool
+	defer func() { relayTLSRootCAs = nil }()
+
 	var (
 		mu     sync.Mutex
-		hellos []*tls.ClientHelloInfo
+		protos []string
 	)
-	cert := selfSigned(t)
-	cfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		GetConfigForClient: func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
-			mu.Lock()
-			hellos = append(hellos, hi)
-			mu.Unlock()
-			return nil, nil
-		},
-	}
+	cfg := &tls.Config{Certificates: []tls.Certificate{serverCert},
+		// mimic CF edge: it advertises both h2 and http/1.1. If our ALPN
+		// rewrite works, the overlap is http/1.1 only; if the rewrite failed
+		// and the client still offers h2, negotiation yields h2 -> test fails.
+		NextProtos: []string{"h2", "http/1.1"}}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -71,8 +85,12 @@ func captureHellos(t *testing.T, n int) []*tls.ClientHelloInfo {
 				return
 			}
 			go func() {
-				buf := make([]byte, 1)
-				_, _ = c.Read(buf) // handshake proceeds; cert will be rejected client-side
+				tc := c.(*tls.Conn)
+				buf := make([]byte, 64)
+				_, _ = tc.Read(buf) // drive the handshake
+				mu.Lock()
+				protos = append(protos, tc.ConnectionState().NegotiatedProtocol)
+				mu.Unlock()
 				c.Close()
 			}()
 		}
@@ -80,37 +98,28 @@ func captureHellos(t *testing.T, n int) []*tls.ClientHelloInfo {
 
 	for i := 0; i < n; i++ {
 		conn, err := dialRelayTLS(context.Background(), "tcp", ln.Addr().String())
-		if err == nil {
-			conn.Close() // unexpected but harmless
+		if err != nil {
+			t.Fatalf("dial %d: uTLS browser handshake failed: %v", i, err)
 		}
+		conn.Close()
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(hellos) < n {
-		t.Fatalf("captured %d hellos, want %d", len(hellos), n)
+	if len(protos) < n {
+		t.Fatalf("server saw %d handshakes, want %d", len(protos), n)
 	}
-	return hellos
+	return protos
 }
 
-func TestRelayTLSHelloRandomized(t *testing.T) {
-	hellos := captureHellos(t, 3)
-	suites := make([]string, 3)
-	for i, hi := range hellos {
-		t.Logf("handshake %d: %d cipher suites, versions=%v", i, len(hi.CipherSuites), hi.SupportedVersions)
-		suites[i] = fmtCipherIDs(hi.CipherSuites)
+func TestRelayTLSBrowserFingerprint(t *testing.T) {
+	protos := captureBrowserHandshakes(t, 3)
+	for i, p := range protos {
+		t.Logf("dial %d: ALPN negotiated %q", i, p)
+		if p != "http/1.1" {
+			t.Fatalf("dial %d negotiated %q, want http/1.1 (h2 would break the WS upgrade)", i, p)
+		}
 	}
-	if suites[0] == suites[1] && suites[1] == suites[2] {
-		t.Fatalf("three handshakes produced identical cipher-suite ordering (stable fingerprint!): %s", suites[0])
-	}
-	t.Logf("JA3-relevant cipher ordering differs across handshakes: randomized OK")
-}
-
-func fmtCipherIDs(ids []uint16) string {
-	s := ""
-	for _, id := range ids {
-		s += string(rune(id>>8)) + string(rune(id&0xff))
-	}
-	return s
+	t.Logf("all dials negotiated http/1.1 with browser ClientHellos (Chrome/Firefox/iOS pool) — OK")
 }

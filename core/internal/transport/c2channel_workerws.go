@@ -14,6 +14,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	utls "github.com/refraction-networking/utls"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
 // RelayRoomMsg is the JSON hello/control frame exchanged over the relay WS.
@@ -54,15 +56,51 @@ func init() {
 
 // ---- shared plumbing --------------------------------------------------------
 
+// relayTLSRootCAs optionally overrides the system root pool used to verify
+// relay endpoints (used by tests to trust a local TLS server).
+var relayTLSRootCAs *x509.CertPool
+
+// browserHelloSpecs builds browser-mimicking ClientHello specs (Chrome /
+// Firefox / iOS) with one surgical change: the ALPN extension is rewritten to
+// offer only "http/1.1". Real browsers advertise h2 first, and if the edge
+// negotiates h2 the HTTP/1.1 WebSocket upgrade that follows would break.
+// Everything else — cipher suites, extensions, curves, GREASE — stays exactly
+// as the browser sends it, so the JA3/JA4 fingerprint looks authentic.
+func browserHelloSpecs() ([]*utls.ClientHelloSpec, error) {
+	ids := []utls.ClientHelloID{
+		utls.HelloChrome_Auto,
+		utls.HelloFirefox_Auto,
+		utls.HelloIOS_Auto,
+	}
+	var specs []*utls.ClientHelloSpec
+	for _, id := range ids {
+		spec, err := utls.UTLSIdToSpec(id)
+		if err != nil {
+			return nil, err
+		}
+		replaced := false
+		for i, ext := range spec.Extensions {
+			if _, ok := ext.(*utls.ALPNExtension); ok {
+				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}}
+				replaced = true
+			}
+		}
+		if replaced {
+			specs = append(specs, &spec)
+		}
+	}
+	return specs, nil
+}
+
 // dialRelayTLS dials TCP and completes a uTLS handshake for relay WSS
 // connections (both agent and CC sides).
 //
-// Browser-mimicking ClientHellos (Chrome/Firefox/IOS) are deliberately
-// excluded: they advertise ALPN h2, and if the edge negotiates h2 the
-// HTTP/1.1 WebSocket upgrade that follows would break. Instead we use
-// HelloRandomizedNoALPN — a fresh random JA3 per connection (no stable Go
-// fingerprint), and no ALPN extension means the server defaults to
-// HTTP/1.1, which is exactly what the WS upgrade speaks.
+// The ClientHello mimics a real browser (randomly picked among Chrome,
+// Firefox, iOS — the most common fingerprints on any network) with ALPN
+// pinned to http/1.1 so the WebSocket upgrade works. If spec generation
+// fails for any reason we fall back to HelloRandomizedNoALPN (fresh random
+// JA3 per connection, no ALPN => HTTP/1.1) — still far from Go's static
+// fingerprint.
 func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	// Independent dialer: the agent may replace net.DefaultResolver with a
 	// DoH resolver whose upstream is unreachable in relay-only networks;
@@ -78,8 +116,19 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	}
 	// CF public cert chain is verified by the system pool (InsecureSkipVerify
 	// stays false; a pinned CA is unnecessary — the endpoint is a CF domain).
-	uconn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloRandomizedNoALPN)
-	if err := uconn.Handshake(); err != nil {
+	cfg := &utls.Config{ServerName: host, RootCAs: relayTLSRootCAs}
+	var uconn *utls.UConn
+	specs, specErr := browserHelloSpecs()
+	if specErr == nil && len(specs) > 0 {
+		spec := specs[util.RandInt(0, len(specs))]
+		uconn = utls.UClient(conn, cfg, utls.HelloCustom)
+		if err = uconn.ApplyPreset(spec); err != nil {
+			uconn = utls.UClient(conn, cfg, utls.HelloRandomizedNoALPN)
+		}
+	} else {
+		uconn = utls.UClient(conn, cfg, utls.HelloRandomizedNoALPN)
+	}
+	if err = uconn.Handshake(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("relay TLS handshake %s: %w", host, err)
 	}
