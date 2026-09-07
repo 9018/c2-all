@@ -128,6 +128,7 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	} else {
 		uconn = utls.UClient(conn, cfg, utls.HelloRandomizedNoALPN)
 	}
+	uconn.SetDeadline(time.Now().Add(10 * time.Second)) // handshake must never hang
 	if err = uconn.Handshake(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("relay TLS handshake %s: %w", host, err)
