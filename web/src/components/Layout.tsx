@@ -178,7 +178,7 @@ export function Layout() {
             onClick={() => handleNavigate('agents')}
             label="Agents"
             icon="🖥️"
-            count={useStore.getState().agents.length}
+            count={(useStore.getState().agents ?? []).length}
           />
           <NavButton
             active={activeView === 'console'}

@@ -13,7 +13,7 @@ import (
 )
 
 func GetConnectedAgents() []*def.Emp3r0rAgent {
-	var agents []*def.Emp3r0rAgent
+	agents := make([]*def.Emp3r0rAgent, 0) // never return null JSON
 	live.AgentControlMap.Range(func(key, value any) bool {
 		agent, ok := key.(*def.Emp3r0rAgent)
 		if !ok || agent == nil {
