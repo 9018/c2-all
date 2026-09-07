@@ -103,6 +103,35 @@ CC 重启/隧道抖动（1006）后 agent 可能被永久锁在门外：
 2. `dispatcher.go`：checkin 失败时回 `checkin-error` ACK（此前静默丢弃）。
 3. `poll.go`（agent）：checkin ACK 等待加 60s 超时，超时后走退避重试。
 
+## Agent 身份与重启语义（2026-09-07 实测撞出的边界）
+
+**结论先行：普通二进制 agent 进程重启 ≠ 无感重连。**
+
+身份模型由三块拼成，交互出以下语义：
+- **UUID**：由主机名+用户+配置派生，跨进程稳定（同一个二进制在同一台主机上永远是同一个 UUID）
+- **身份密钥**：`GetAgentKey()` 进程级临时（`sync.Once`，进程死即丢）；仅 stager 路径
+  会从 FD3 注入的 seed 经 HKDF 派生出**确定性**密钥
+- **CC 侧 TOFU pin**：首次 checkin 时把 agent 公钥钉进 DB，此后同 UUID 必须出示同一密钥
+
+由此得出的运维矩阵：
+
+| 场景 | 结果 |
+|---|---|
+| CC 重启，agent 进程不动 | ✅ 密钥没变，pin 仍匹配，零干预回连（已 3 次实测） |
+| agent 进程重启，CC 不动 | ❌ 新进程 = 新临时密钥，CC 报 `key rotation is disabled` 拒绝；恢复路径 = `forget`（重置 DB pin）+ agent 重启重新 TOFU 注册（已实测闭环） |
+| 真克隆 / 同 UUID 双进程并发 | ✅ 同样被拒（后到者 hellos 每 ~90s 刷一次 CRITICAL 日志，无害但吵） |
+| stager（seed）路径重启 | ✅ seed 不变 → 密钥不变 → pin 匹配，无感重启 |
+
+实战推论：
+1. **测试环境**反复重启 agent 是常态，每次都要 forget + 重启，别只重启不 forget
+   （会被钉死在 hello 重试循环里，日志刷 `pinned key verification failed`）
+2. forget 走 `POST /api/agents/forget`，body 用裸 UUID
+   （`2579f697-…`，别带 `a9017\\a9017-agent-` 前缀，带前缀会 404）
+3. **持久化部署必须走 stager/seed 路径**，否则每次进程重启都等于丢身份——
+   这不是 bug，是反克隆设计的代价；seed 机制正是为了两全
+4. 若未来想让普通二进制也无感重启，候选方案是照 stager 思路从嵌入配置的
+   per-agent secret 确定性派生密钥（密钥不落盘、UUID 本就稳定、不额外引入可关联性）
+
 ## 部署与测试环境（2026-09-07 快照）
 - 生产 relay：`emp3r0r-cf-relay` Worker（双自定义域名，room-a/room-b，role=cc）
 - 本地开发测试：`npx wrangler dev --port 8806 --var EMP_SHARED_SECRET:testsec`
