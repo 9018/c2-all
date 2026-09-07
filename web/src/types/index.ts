@@ -18,6 +18,7 @@ export interface Emp3r0rAgent {
   Kernel: string
   Arch: string
   From: string
+  ExternalIP?: string // agent's public egress IP, self-detected via public echo services; empty when undetectable
   IPs: string[]
   ARP: string[]
   User: string

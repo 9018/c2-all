@@ -47,6 +47,7 @@ type Emp3r0rAgent struct {
 	MeshGossipPort string        `cbor:"39,keyasint"` // dynamic mesh gossip port assigned to this agent
 	Files          []string      `cbor:"40,keyasint"` // list of available files/modules in agent storage/MemFS
 	GOArch         string        `cbor:"41,keyasint"` // runtime.GOARCH of the agent binary (not the OS kernel arch)
+	ExternalIP     string        `cbor:"42,keyasint"` // agent's public egress IP, self-detected via public echo services (ip.sb etc.); meaningful when CC only sees the relay's address
 }
 
 // EnrichedPeer holds detailed peer information signed by C2

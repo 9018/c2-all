@@ -257,7 +257,9 @@ export function Dashboard() {
                               {agent.User}
                             </span>
                           </td>
-                          <td className="py-3 text-gray-500 font-mono text-xs">{agent.From}</td>
+                          <td className="py-3 text-gray-500 font-mono text-xs">
+                            {agent.ExternalIP || agent.From}
+                          </td>
                           <td className="py-3 text-gray-500 text-xs">
                             {new Date(agent.LastSeen).toLocaleTimeString()}
                           </td>

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -431,6 +432,24 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 						"AgentTag": msg.Tag,
 					})
 					continue
+				}
+				// External-IP probes are data updates, not console output: validate,
+				// persist on the live agent record, and refresh web clients. The
+				// CC cannot derive this address itself for relayed agents (it only
+				// sees the relay's Cloudflare edge address).
+				if len(msg.CmdSlice) > 0 && msg.CmdSlice[0] == def.C2CmdExtIP {
+					ip := strings.TrimSpace(string(msg.Response))
+				if net.ParseIP(ip) != nil {
+					agent.ExternalIP = ip
+					logging.Infof("External IP of %s: %s", agent.Name, ip)
+					BroadcastToWebClients("agent_update", map[string]interface{}{
+						"uuid":        agent.UUID,
+						"external_ip": ip,
+					})
+				} else {
+					logging.Warningf("!extip: invalid response from %s: %q", agent.Name, util.LimitString(ip, 40))
+				}
+				continue
 				}
 				// Job responses whose IDs belong to the CC-internal SOCKS5 pivot
 				// are consumed by the socks manager (via live.CmdResultsReady) and

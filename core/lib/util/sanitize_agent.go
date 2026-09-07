@@ -16,6 +16,7 @@ func SanitizeAgentMetadata(a *def.Emp3r0rAgent) {
 	}
 
 	// String fields (single-line identifiers / metadata)
+	a.ExternalIP = SanitizeOneLine(a.ExternalIP)
 	a.Tag = SanitizeOneLine(a.Tag)
 	a.Name = SanitizeOneLine(a.Name)
 	a.ShortID = SanitizeOneLine(a.ShortID)

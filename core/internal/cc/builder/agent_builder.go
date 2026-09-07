@@ -136,6 +136,17 @@ func EncryptAgentConfig(cfg AgentBuildConfig) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("encrypt config: %w", err)
 	}
+	// AES-GCM output that ends in 0x00 is a 1/256-per-build landmine: the
+	// agent reads its config with a raw-verify (fails: 4096-byte zero padding
+	// breaks the GCM tag) followed by a legacy TrimRight fallback (fails: it
+	// strips that final ciphertext byte). Re-encrypt with fresh salt/nonce
+	// until the last byte is non-zero — cheap and fully compatible.
+	for len(encryptedBytes) > 0 && encryptedBytes[len(encryptedBytes)-1] == 0x00 {
+		encryptedBytes, err = crypto.AES_GCM_Encrypt([]byte(def.MagicString), cborBytes)
+		if err != nil {
+			return nil, "", fmt.Errorf("re-encrypt config: %w", err)
+		}
+	}
 
 	return encryptedBytes, configStruct.AgentUUID, nil
 }

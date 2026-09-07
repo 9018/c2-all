@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '@/stores/useStore'
+import { api } from '@/lib/api'
 import { 
   Monitor, 
   Shield,
@@ -21,6 +22,30 @@ function AgentCard({ agent, isActive, onSelect, onConsole }: {
 }) {
   const lastSeen = new Date(agent.LastSeen)
   const isOnline = Date.now() - lastSeen.getTime() < 60000
+
+  // External IP retest: fire-and-forget command; the agent_update WS
+  // broadcast refreshes the store, which flips the button back via effect.
+  const [retesting, setRetesting] = useState(false)
+  useEffect(() => {
+    if (retesting && agent.ExternalIP) setRetesting(false)
+  }, [agent.ExternalIP, retesting])
+  const retestExternalIP = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (retesting) return
+    setRetesting(true)
+    try {
+      await api.sendCommand({
+        AgentTag: agent.Tag,
+        Action: 'command',
+        Command: '!extip --quiet',
+        JobID: crypto.randomUUID(),
+      })
+    } catch {
+      setRetesting(false)
+    }
+    // safety net: never stay stuck if the agent never answers
+    setTimeout(() => setRetesting(false), 15000)
+  }
 
   return (
     <div
@@ -74,7 +99,9 @@ function AgentCard({ agent, isActive, onSelect, onConsole }: {
         </div>
         <div className="flex items-center gap-1.5 text-gray-400">
           <Wifi className="w-3 h-3 md:w-4 md:h-4 text-gray-500" />
-          <span className="truncate">{agent.From}</span>
+          <span className="truncate" title={agent.ExternalIP || agent.From}>
+            {agent.ExternalIP || agent.From}
+          </span>
         </div>
       </div>
 
@@ -89,6 +116,15 @@ function AgentCard({ agent, isActive, onSelect, onConsole }: {
         >
           <Terminal className="w-3 h-3 md:w-4 md:h-4" />
           <span>Console</span>
+        </button>
+        <button
+          onClick={retestExternalIP}
+          disabled={retesting}
+          title="Retest external IP (agent queries public echo services)"
+          className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-300 rounded-lg transition-colors text-xs md:text-sm"
+        >
+          <RefreshCw className={`w-3 h-3 md:w-4 md:h-4 ${retesting ? 'animate-spin' : ''}`} />
+          <span className="hidden md:inline">{retesting ? 'Testing' : 'Ext IP'}</span>
         </button>
       </div>
     </div>

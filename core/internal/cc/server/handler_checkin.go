@@ -214,6 +214,12 @@ func handleAgentCheckInStream(dec *cbor.Decoder, out *cbor.Encoder, auth *def.Ms
 		}
 	}
 
+	// Refresh web clients: a (re)connected agent may flip its online state,
+	// and first checkins carry the freshly detected external IP.
+	BroadcastToWebClients("agent_update", map[string]interface{}{
+		"uuid": target.UUID,
+	})
+
 	// Send checkin-ok ACK to agent
 	// This helps agents synchronize their connection teardown, especially in polling modes
 	ack := &def.MsgTunData{Tag: "checkin-ok"}

