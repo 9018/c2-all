@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Cloud, RefreshCw, AlertTriangle, Key, Copy } from 'lucide-react'
+import { Cloud, RefreshCw, AlertTriangle, Key, Copy, Globe } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface RelayQuota {
   configured: boolean
   api_token?: string
   account_id?: string
+  relay_hostnames?: string[]
   workers: {
     requests_today: number
     errors_today: number
@@ -152,6 +153,23 @@ export function RelayQuotaCard() {
               data as of {quota.data_date || '—'}
             </span>
           </div>
+          {(quota.relay_hostnames?.length || 0) > 0 && (
+            <div className="flex items-center gap-2 text-xs text-gray-600 pt-2 border-t border-gray-800/60 mt-1">
+              <Globe className="w-3 h-3 shrink-0" />
+              {quota.relay_hostnames!.map((h, i) => (
+                <span key={h} className="flex items-center gap-2">
+                  {i > 0 && <span className="text-gray-700">·</span>}
+                  <button
+                    onClick={() => navigator.clipboard?.writeText(h)}
+                    className="font-mono text-gray-500 hover:text-gray-300 transition-colors"
+                    title="Click to copy"
+                  >
+                    {h}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           {(quota.api_token || quota.account_id) && (
             <div className="flex items-center gap-2 text-xs text-gray-600 pt-1 border-t border-gray-800/60 mt-1 pt-2">
               <Key className="w-3 h-3 shrink-0" />

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -45,6 +46,9 @@ type cfQuotaResponse struct {
 	// credentials the quota panel is using
 	APIToken  string `json:"api_token,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
+
+	// relay hostnames the CC is connected to (from emp3r0r.json relay_urls)
+	RelayHostnames []string `json:"relay_hostnames,omitempty"`
 
 	Workers struct {
 		RequestsToday     int64 `json:"requests_today"`
@@ -268,10 +272,23 @@ func handleWebRelayQuota(w http.ResponseWriter, r *http.Request) {
 	}
 	cfQuotaCacheMu.Unlock()
 
+	fillHostnames := func(q *cfQuotaResponse) {
+		seen := map[string]bool{}
+		for _, u := range live.RuntimeConfig.RelayURLs {
+			host := relayHostOf(u)
+			if host == "" || seen[host] {
+				continue
+			}
+			seen[host] = true
+			q.RelayHostnames = append(q.RelayHostnames, host)
+		}
+	}
+
 	cfg, err := loadCFRelayConfig()
 	if err != nil {
 		resp := &cfQuotaResponse{Configured: false, FetchedAt: time.Now()}
 		resp.Error = err.Error()
+		fillHostnames(resp)
 		cfQuotaCacheMu.Lock()
 		cfQuotaCache, cfQuotaCacheAt = resp, time.Now()
 		cfQuotaCacheMu.Unlock()
@@ -289,9 +306,18 @@ func handleWebRelayQuota(w http.ResponseWriter, r *http.Request) {
 		resp.Error = err.Error()
 		quota = resp
 	}
+	fillHostnames(quota)
 
 	cfQuotaCacheMu.Lock()
 	cfQuotaCache, cfQuotaCacheAt = quota, time.Now()
 	cfQuotaCacheMu.Unlock()
 	json.NewEncoder(w).Encode(quota)
+}
+
+func relayHostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
