@@ -89,10 +89,6 @@ func InitWebServer(port int) {
 		}
 	}
 
-	// 生成访问令牌
-	tokenFile := filepath.Join(live.EmpWorkSpace, "web_token.txt")
-	token := loadOrGenerateToken(tokenFile)
-
 	// 设置路由
 	r := mux.NewRouter()
 
@@ -133,38 +129,41 @@ func InitWebServer(port int) {
 	
 	// 健康检查
 	api.HandleFunc("/health", handleHealth).Methods("GET")
-	
-	// 认证中间件（用于需要认证的 API）
-	authApi := api.PathPrefix("").Subrouter()
-	authApi.Use(authMiddleware(token))
-	
+
 	// Agent API
-	authApi.HandleFunc("/agents", handleWebListAgents).Methods("GET")
-	authApi.HandleFunc("/agents/active", handleWebSetActiveAgent).Methods("POST")
-	authApi.HandleFunc("/agents/forget", handleWebForgetAgent).Methods("POST")
+	api.HandleFunc("/agents", handleWebListAgents).Methods("GET")
+	api.HandleFunc("/agents/active", handleWebSetActiveAgent).Methods("POST")
+	api.HandleFunc("/agents/forget", handleWebForgetAgent).Methods("POST")
 	
 	// 命令 API
-	authApi.HandleFunc("/command", handleWebSendCommand).Methods("POST")
+	api.HandleFunc("/command", handleWebSendCommand).Methods("POST")
 
 	// CF relay 用量面板（Workers/DO 免费配额燃烧度）
-	authApi.HandleFunc("/relay-quota", handleWebRelayQuota).Methods("GET")
+	api.HandleFunc("/relay-quota", handleWebRelayQuota).Methods("GET")
+
+	// CF relay Worker fleet（多账号 + 热迁移）
+	api.HandleFunc("/cf/accounts", handleWebCFAccounts).Methods("GET", "POST")
+	api.HandleFunc("/cf/accounts/{id}", handleWebCFAccountByID).Methods("PUT", "DELETE")
+	api.HandleFunc("/cf/accounts/{id}/activate", handleWebCFActivate).Methods("POST")
+	api.HandleFunc("/cf/settings", handleWebCFSettings).Methods("PUT")
+	api.HandleFunc("/cf/status", handleWebCFStatus).Methods("GET")
 	
 	// 文件管理 API
-	authApi.HandleFunc("/ls", handleWebListFiles).Methods("POST")
-	authApi.HandleFunc("/download", handleWebDownloadFile).Methods("POST")
-	authApi.HandleFunc("/upload", handleWebUploadFile).Methods("POST")
-	authApi.HandleFunc("/rm", handleWebRemove).Methods("POST")
-	authApi.HandleFunc("/mkdir", handleWebMkdir).Methods("POST")
+	api.HandleFunc("/ls", handleWebListFiles).Methods("POST")
+	api.HandleFunc("/download", handleWebDownloadFile).Methods("POST")
+	api.HandleFunc("/upload", handleWebUploadFile).Methods("POST")
+	api.HandleFunc("/rm", handleWebRemove).Methods("POST")
+	api.HandleFunc("/mkdir", handleWebMkdir).Methods("POST")
 	// Extra FS ops
-	authApi.HandleFunc("/stat", handleWebStat).Methods("POST")
-	authApi.HandleFunc("/cp", handleWebCopy).Methods("POST")
-	authApi.HandleFunc("/mv", handleWebMove).Methods("POST")
+	api.HandleFunc("/stat", handleWebStat).Methods("POST")
+	api.HandleFunc("/cp", handleWebCopy).Methods("POST")
+	api.HandleFunc("/mv", handleWebMove).Methods("POST")
 
 	// 模块 API
-	authApi.HandleFunc("/modules", handleWebListModules).Methods("GET")
+	api.HandleFunc("/modules", handleWebListModules).Methods("GET")
 	
 	// WebSocket
-	authApi.HandleFunc("/ws", handleWebSocket)
+	api.HandleFunc("/ws", handleWebSocket)
 
 	// 静态文件服务（前端）
 	webDir := filepath.Join(live.EmpWorkSpace, "web")
@@ -190,7 +189,6 @@ func InitWebServer(port int) {
 	go broadcastHandler()
 
 	logging.Successf("🚀 Starting Web server at port %d", port)
-	logging.Successf("🌐 Access token: %s", token)
 	logging.Successf("🔒 Web UI: https://localhost:%d", port)
 
 	// 启动服务器
@@ -199,63 +197,6 @@ func InitWebServer(port int) {
 			logging.Errorf("Web server error: %v", err)
 		}
 	}()
-}
-
-// loadOrGenerateToken 加载或生成访问令牌
-func loadOrGenerateToken(path string) string {
-	data, err := os.ReadFile(path)
-	if err == nil {
-		return string(data)
-	}
-
-	// 生成新令牌
-	token := fmt.Sprintf("emp3r0r-%s", generateRandomString(32))
-	os.WriteFile(path, []byte(token), 0600)
-	return token
-}
-
-// generateRandomString 生成随机字符串
-func generateRandomString(length int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
-		time.Sleep(time.Nanosecond)
-	}
-	return string(result)
-}
-
-// authMiddleware 认证中间件
-func authMiddleware(token string) mux.MiddlewareFunc {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 检查 Authorization header
-			authHeader := r.Header.Get("Authorization")
-			
-			// 对于 WebSocket 连接，也检查 query 参数中的 session/token
-			if authHeader == "" {
-				sessionID := r.URL.Query().Get("session")
-				if sessionID != "" {
-					authHeader = "Bearer " + sessionID
-				}
-			}
-
-			if authHeader == "" {
-				logging.Errorf("WebSocket auth failed: no auth header, session=%q", r.URL.Query().Get("session"))
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			// 验证 token
-			if authHeader != "Bearer "+token {
-				logging.Errorf("WebSocket auth failed: header=%q, expected=%q", authHeader, "Bearer "+token)
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // handleHealth 健康检查

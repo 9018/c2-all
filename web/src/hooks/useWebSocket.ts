@@ -4,11 +4,9 @@ import { useStore } from '@/stores/useStore'
 import { WSMessageType } from '@/types'
 
 export function useWebSocket() {
-  const { token, addLog, fetchAgents } = useStore()
+  const { addLog, fetchAgents } = useStore()
 
   useEffect(() => {
-    if (!token) return
-
     // Keep handler references so the cleanup can remove them; otherwise
     // handlers accumulate and every message is processed N times (double
     // PTY echo, duplicated logs, ...).
@@ -59,13 +57,13 @@ export function useWebSocket() {
     ] as const
     messageTypes.forEach((t) => wsClient.on(t, handleMessage))
 
-    wsClient.connect(token)
+    wsClient.connect('')
 
     return () => {
       messageTypes.forEach((t) => wsClient.off(t, handleMessage))
       wsClient.disconnect()
     }
-  }, [token, fetchAgents, addLog])
+  }, [fetchAgents, addLog])
 
   return {
     send: wsClient.send.bind(wsClient),

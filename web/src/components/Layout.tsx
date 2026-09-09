@@ -5,14 +5,15 @@ import { AgentList } from './AgentList'
 import { CommandConsole } from './CommandConsole'
 import { ModulePanel } from './ModulePanel'
 import { FileManager } from './FileManager'
+import { WorkerManagePage } from './WorkerManagePage'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useStore } from '@/stores/useStore'
-import { Menu, X, LogOut } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 
 export function Layout() {
   const [activeView, setActiveView] = useState<string>('dashboard')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const { activeAgent, setToken } = useStore()
+  const { activeAgent } = useStore()
 
   // 初始化 WebSocket 连接
   useWebSocket()
@@ -55,15 +56,11 @@ export function Layout() {
         return <FileManager />
       case 'modules':
         return <ModulePanel />
+      case 'workers':
+        return <WorkerManagePage />
       default:
         return <Dashboard />
     }
-  }
-
-  const handleLogout = () => {
-    setToken('')
-    localStorage.removeItem('emp3r0r_token')
-    window.location.reload()
   }
 
   return (
@@ -98,12 +95,6 @@ export function Layout() {
               </span>
             </div>
           )}
-          <button
-            onClick={handleLogout}
-            className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-gray-200"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
         </div>
       </header>
 
@@ -150,13 +141,6 @@ export function Layout() {
             <span className="text-sm text-gray-500">
               {new Date().toLocaleDateString()}
             </span>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-800 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Logout
-            </button>
           </div>
         </header>
 

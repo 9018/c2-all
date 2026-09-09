@@ -1,18 +1,11 @@
-import { Emp3r0rAgent, Operation, ModuleConfig } from '@/types'
+import { Emp3r0rAgent, Operation, ModuleConfig, CFFleet } from '@/types'
 
 const API_BASE = '/api'
 
 class ApiClient {
-  private token: string = ''
-
-  setToken(token: string) {
-    this.token = token
-  }
-
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
     }
 
     const response = await fetch(`${API_BASE}${path}`, {
@@ -31,7 +24,6 @@ class ApiClient {
   private async requestVoid(path: string, options?: RequestInit): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
     }
 
     const response = await fetch(`${API_BASE}${path}`, {
@@ -63,10 +55,29 @@ class ApiClient {
     return this.request<any>('/relay-quota')
   }
 
+  // CF worker fleet (multi-account + hot migration)
+  async getCFAccounts(): Promise<CFFleet> {
+    return this.request<CFFleet>('/cf/accounts')
+  }
+  async addCFAccount(acct: { id: string; api_token: string; label: string; domain: string; zone_id: string }): Promise<CFFleet> {
+    return this.request<CFFleet>('/cf/accounts', { method: 'POST', body: JSON.stringify(acct) })
+  }
+  async updateCFAccount(id: string, acct: { label: string; api_token: string; domain: string; zone_id: string }): Promise<CFFleet> {
+    return this.request<CFFleet>(`/cf/accounts/${id}`, { method: 'PUT', body: JSON.stringify(acct) })
+  }
+  async deleteCFAccount(id: string): Promise<CFFleet> {
+    return this.request<CFFleet>(`/cf/accounts/${id}`, { method: 'DELETE' })
+  }
+  async activateCFAccount(id: string): Promise<{ status: string; account: string }> {
+    return this.request<{ status: string; account: string }>(`/cf/accounts/${id}/activate`, { method: 'POST' })
+  }
+  async updateCFSettings(s: { migrate_threshold?: number; auto_migrate?: boolean; shared_secret?: string }): Promise<CFFleet> {
+    return this.request<CFFleet>('/cf/settings', { method: 'PUT', body: JSON.stringify(s) })
+  }
+
   async sendCommand(operation: Operation): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
     }
 
     const response = await fetch(`${API_BASE}/command`, {
@@ -118,7 +129,6 @@ class ApiClient {
 
   async downloadFile(agentTag: string, filePath: string): Promise<Blob> {
     const headers: Record<string, string> = {
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
     }
 
     const response = await fetch(`${API_BASE}/download`, {

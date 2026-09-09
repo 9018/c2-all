@@ -59,6 +59,9 @@ func ServerMain(wg_port int, hosts string, numOperators int) {
 		go StartRelayListeners(relayCtx, live.RuntimeConfig.RelayURLs)
 	}
 
+	// Cloudflare relay hot-migration watcher (multi-account quota failover)
+	StartCFMigrationWatcher(context.Background())
+
 	// Start Web server for web UI
 	webPort := 9443 // 默认 Web 端口
 	InitWebServer(webPort)

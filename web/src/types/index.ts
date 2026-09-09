@@ -103,3 +103,39 @@ export interface WSMessage {
   data: any
   timestamp: string
 }
+
+// Cloudflare relay worker fleet (multi-account + hot migration)
+export interface CFAccount {
+  id: string
+  label: string
+  token_masked: string
+  domain: string
+  zone_id: string
+  active: boolean
+  quota?: {
+    durable_objects: { requests_month: number; errors_month: number; gb_seconds: number }
+    limits: { do_requests_per_month: number; do_gb_seconds_per_month: number }
+    data_date: string
+  }
+  do_used_pct: number
+}
+
+export interface CFMigrationHistory {
+  time: string
+  from_account: string
+  to_account: string
+  from_host: string
+  to_host: string
+  reason: string
+  error?: string
+}
+
+export interface CFFleet {
+  accounts: CFAccount[]
+  active_account_id: string
+  worker_name: string
+  shared_secret?: string
+  migrate_threshold: number
+  auto_migrate: boolean
+  history: CFMigrationHistory[]
+}

@@ -25,7 +25,7 @@ class WebSocketClient {
     this.intentionalClose = false
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/ws?session=${sessionId}`
+    const wsUrl = `${protocol}//${window.location.host}/api/ws`
 
     const ws = new WebSocket(wsUrl)
     this.ws = ws

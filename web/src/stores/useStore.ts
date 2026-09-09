@@ -7,10 +7,6 @@ interface AppState {
   connected: boolean
   setConnected: (connected: boolean) => void
 
-  // 认证
-  token: string
-  setToken: (token: string) => void
-
   // Agent 管理
   agents: Emp3r0rAgent[]
   activeAgent: Emp3r0rAgent | null
@@ -43,24 +39,6 @@ export const useStore = create<AppState>((set, get) => ({
   // 连接状态
   connected: false,
   setConnected: (connected) => set({ connected }),
-
-  // 认证 - 从 localStorage 恢复 token
-  // 刷新页面时 store 从 localStorage 恢复 token，但 api.setToken() 只在登录时
-  // 调用过 —— 不同步的话，REST 客户端没有 token，所有请求 401 直到手动重新登录。
-  token: (() => {
-    const t = localStorage.getItem('emp3r0r_token') || ''
-    if (t) api.setToken(t)
-    return t
-  })(),
-  setToken: (token) => {
-    api.setToken(token)
-    set({ token })
-    if (token) {
-      localStorage.setItem('emp3r0r_token', token)
-    } else {
-      localStorage.removeItem('emp3r0r_token')
-    }
-  },
 
   // Agent 管理
   agents: [],

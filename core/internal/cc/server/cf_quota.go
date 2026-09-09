@@ -286,14 +286,20 @@ func handleWebRelayQuota(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := loadCFRelayConfig()
 	if err != nil {
-		resp := &cfQuotaResponse{Configured: false, FetchedAt: time.Now()}
-		resp.Error = err.Error()
-		fillHostnames(resp)
-		cfQuotaCacheMu.Lock()
-		cfQuotaCache, cfQuotaCacheAt = resp, time.Now()
-		cfQuotaCacheMu.Unlock()
-		json.NewEncoder(w).Encode(resp)
-		return
+		// no legacy single-account file: fall back to the active fleet
+		// account so the card still works in the multi-account world
+		if acct, aerr := cfActiveAccount(); aerr == nil {
+			cfg = &cfRelayConfig{APIToken: acct.APIToken, AccountID: acct.ID}
+		} else {
+			resp := &cfQuotaResponse{Configured: false, FetchedAt: time.Now()}
+			resp.Error = aerr.Error()
+			fillHostnames(resp)
+			cfQuotaCacheMu.Lock()
+			cfQuotaCache, cfQuotaCacheAt = resp, time.Now()
+			cfQuotaCacheMu.Unlock()
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
 	}
 
 	quota, err := fetchCFQuota(cfg)
