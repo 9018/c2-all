@@ -246,8 +246,14 @@ func uploadRelayWorker(acc *CFAccount, workerName, sharedSecret, migrateURL stri
 			return err
 		}
 		if err := cfCheck(data, status, "upload worker "+workerName); err != nil {
-			if i == 0 && strings.Contains(err.Error(), "10074") {
-				logging.Infof("cf deploy: RelayDO class exists on %s, retrying with tag-only migration", acc.ID)
+			// 10074: class already exists (drop new_sqlite_classes)
+			// 10079: script tag precondition failed — e.g. the script was last
+			// uploaded bare (tag '') while we send new_tag v1, or vice versa;
+			// the tag check happens before the class check, so tier 0 can hit
+			// this too. Dropping migrations entirely is always safe for an
+			// existing class.
+			if i < len(attempts)-1 && (strings.Contains(err.Error(), "10074") || strings.Contains(err.Error(), "10079")) {
+				logging.Infof("cf deploy: %s: retrying with simpler migration metadata: %v", acc.ID, err)
 				continue
 			}
 			return err

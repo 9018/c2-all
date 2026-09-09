@@ -178,7 +178,7 @@ func rotateDoH(failedURL, nextURL string) {
 	if newDoH == "" {
 		return
 	}
-	if resolver, err := dns.NewDoHResolver(newDoH, dns.DoHCache()); err == nil && resolver != nil {
+	if resolver, err := NewPinnedDoHResolver(newDoH); err == nil && resolver != nil {
 		net.DefaultResolver = resolver
 		common.RuntimeConfig.DoHServer = newDoH
 		logging.Warningf("DoH re-homed to failover endpoint: %s", hostOf(nextURL))
@@ -193,6 +193,40 @@ func deriveDoH(endpointURL string) string {
 		return ""
 	}
 	return fmt.Sprintf("https://%s/dns?secret=%s", host, secret)
+}
+
+// cfEdgeBootstrapIPs are generic Cloudflare anycast edge addresses that
+// terminate TLS for ANY proxied hostname via SNI routing (a zone's own
+// 104.21.x/172.67.x pair is just a slice of the same anycast network;
+// verified working 2026-09). Pinning them lets a DoH resolver bootstrap
+// WITHOUT resolving the DoH server's own hostname through the plaintext
+// system resolver — the last DNS leak an agent had.
+var cfEdgeBootstrapIPs = []string{
+	"104.16.249.36:443",
+	"172.67.68.100:443",
+	"188.114.96.3:443",
+	"188.114.97.3:443",
+}
+
+// NewPinnedDoHResolver returns a DoH resolver for uri (https://host/dns?...)
+// that never consults the system resolver: the DoH transport dials pinned CF
+// anycast edges directly, with TLS SNI still selecting our zone. Falls back
+// to the stock resolver (plaintext system-DNS bootstrap) when no pinned
+// edge answers — e.g. if CF retires those addresses.
+func NewPinnedDoHResolver(uri string) (*net.Resolver, error) {
+	pinned, err := dns.NewDoHResolver(uri, dns.DoHCache(), dns.DoHAddresses(cfEdgeBootstrapIPs...))
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		// verify the pinned path actually works by resolving the relay host
+		// itself (pre-warms the cache for the first WS dial, too)
+		if host := hostOf(uri); host != "" {
+			if _, lerr := pinned.LookupHost(ctx, host); lerr == nil {
+				return pinned, nil
+			}
+		}
+	}
+	return dns.NewDoHResolver(uri, dns.DoHCache())
 }
 
 func hostOf(rawURL string) string {

