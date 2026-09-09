@@ -8,7 +8,6 @@ import (
 	"text/template"
 
 	"github.com/carapace-sh/carapace"
-	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/api/client"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/agents"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/ftp"
@@ -577,10 +576,6 @@ func execCmd(cmd *cobra.Command, args []string) {
 
 func exitEmp3r0r(_ *console.Console) {
 	logging.Warningf("Exiting emp3r0r... Goodbye!")
-	if common.RuntimeConfig.PreflightEnabled {
-		logging.Warningf("Remember to remove the conditional C2 preflight URL from your server or agents will make too much noise: %s",
-			common.RuntimeConfig.PreflightURL)
-	}
 	cli.TmuxDeinitWindows()
 	os.Exit(0)
 }

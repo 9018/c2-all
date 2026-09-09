@@ -197,34 +197,4 @@ func TestCreatePreflightHTTPClient(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 
-	t.Run("Preflight Client", func(t *testing.T) {
-		client := CreatePreflightHTTPClient(server.URL)
-		if client == nil {
-			t.Fatal("CreatePreflightHTTPClient returned nil")
-		}
-
-		// Verify timeout is set
-		if client.Timeout != 30*time.Second {
-			t.Errorf("Expected timeout to be 30s, got %v", client.Timeout)
-		}
-
-		resp, err := client.Get(server.URL)
-		if err != nil {
-			t.Fatalf("Failed to make request: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("Failed to read response body: %v", err)
-		}
-
-		if string(body) != "preflight ok" {
-			t.Errorf("Expected 'preflight ok', got '%s'", string(body))
-		}
-	})
 }

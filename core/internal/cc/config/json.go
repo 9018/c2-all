@@ -45,12 +45,6 @@ type jsonConfig struct {
 	SSHHostKey                string                  `json:"ssh_host_key"`
 	SSHDShellPort             string                  `json:"sshd_shell_port"`
 	MeshGossipPort            string                  `json:"mesh_gossip_port"`
-	PreflightEnabled          bool                    `json:"preflight_enabled"`
-	PreflightURL              string                  `json:"preflight_url"`
-	PreflightMethod           string                  `json:"preflight_method"`
-	PreflightHeaders          map[string]string       `json:"preflight_headers"`
-	PreflightIntervalMin      int                     `json:"preflight_interval_min"`
-	PreflightIntervalMax      int                     `json:"preflight_interval_max"`
 	CAPEM                     string                  `json:"ca_pem"`
 	CAFingerprint             string                  `json:"ca_fingerprint"`
 	C2TransportProxy          string                  `json:"c2_transport_proxy"`
@@ -171,17 +165,6 @@ func readJSONConfig(jsonData []byte, config_to_write *def.Config) (err error) {
 
 	config_to_write.SSHDShellPort = getString("sshd_shell_port")
 	config_to_write.MeshGossipPort = getString("mesh_gossip_port")
-	config_to_write.PreflightEnabled = getBool("preflight_enabled")
-	config_to_write.PreflightURL = getString("preflight_url")
-	config_to_write.PreflightMethod = getString("preflight_method")
-	if val, ok := raw["preflight_headers"].(map[string]any); ok {
-		config_to_write.PreflightHeaders = make(map[string]string)
-		for k, v := range val {
-			if strV, ok := v.(string); ok {
-				config_to_write.PreflightHeaders[k] = strV
-			}
-		}
-	}
 	config_to_write.CAPEM = getString("ca_pem")
 	config_to_write.CAFingerprint = getString("ca_fingerprint")
 	config_to_write.C2TransportProxy = getString("c2_transport_proxy")
@@ -261,16 +244,6 @@ func readJSONConfig(jsonData []byte, config_to_write *def.Config) (err error) {
 		loadMalleableC2(val)
 	} else if val, ok := raw["MalleableC2"].(map[string]any); ok {
 		loadMalleableC2(val)
-	}
-
-	// Preflight Intervals
-	config_to_write.PreflightIntervalMin = getInt("preflight_interval_min")
-	if config_to_write.PreflightIntervalMin == 0 {
-		config_to_write.PreflightIntervalMin = getInt("PreflightIntervalMin")
-	}
-	config_to_write.PreflightIntervalMax = getInt("preflight_interval_max")
-	if config_to_write.PreflightIntervalMax == 0 {
-		config_to_write.PreflightIntervalMax = getInt("PreflightIntervalMax")
 	}
 
 	// P2P / Mesh
@@ -373,24 +346,6 @@ func readJSONConfig(jsonData []byte, config_to_write *def.Config) (err error) {
 		}
 		if jCfg.MeshGossipPort != "" {
 			config_to_write.MeshGossipPort = jCfg.MeshGossipPort
-		}
-		if jCfg.PreflightEnabled {
-			config_to_write.PreflightEnabled = jCfg.PreflightEnabled
-		}
-		if jCfg.PreflightURL != "" {
-			config_to_write.PreflightURL = jCfg.PreflightURL
-		}
-		if jCfg.PreflightMethod != "" {
-			config_to_write.PreflightMethod = jCfg.PreflightMethod
-		}
-		if len(jCfg.PreflightHeaders) > 0 {
-			config_to_write.PreflightHeaders = jCfg.PreflightHeaders
-		}
-		if jCfg.PreflightIntervalMin != 0 {
-			config_to_write.PreflightIntervalMin = jCfg.PreflightIntervalMin
-		}
-		if jCfg.PreflightIntervalMax != 0 {
-			config_to_write.PreflightIntervalMax = jCfg.PreflightIntervalMax
 		}
 		if jCfg.CAPEM != "" {
 			config_to_write.CAPEM = jCfg.CAPEM

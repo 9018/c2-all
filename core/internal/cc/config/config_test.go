@@ -296,8 +296,6 @@ func TestReadJSONConfigFullCoverage(t *testing.T) {
 		"cc_address": "10.0.0.1",
 		"cc_port": "443",
 		"agent_socks_server_port": "1080",
-		"preflight_interval_min": 60,
-		"preflight_interval_max": 300,
 		"is_p2p_enabled": true,
 		"is_direct_c2_enabled": false,
 		"p2p_transport": "kcp",
@@ -315,12 +313,6 @@ func TestReadJSONConfigFullCoverage(t *testing.T) {
 		t.Fatalf("readJSONConfig failed: %v", err)
 	}
 
-	if loaded.PreflightIntervalMin != 60 {
-		t.Errorf("Expected PreflightIntervalMin 60, got %d", loaded.PreflightIntervalMin)
-	}
-	if loaded.PreflightIntervalMax != 300 {
-		t.Errorf("Expected PreflightIntervalMax 300, got %d", loaded.PreflightIntervalMax)
-	}
 	if !loaded.IsP2PEnabled {
 		t.Errorf("Expected IsP2PEnabled true, got false")
 	}

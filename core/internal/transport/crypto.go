@@ -202,7 +202,7 @@ func CopyC2Blocks(dst io.Writer, src io.Reader, blockSize int) (int64, error) {
 	}
 }
 
-// Helpers for manual Encrypt/Decrypt (used by Preflight)
+// Helpers for manual Encrypt/Decrypt
 func Encrypt(data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(def.AESPassword)
 	if err != nil {

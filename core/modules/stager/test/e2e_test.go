@@ -233,10 +233,6 @@ func runAgentEndToEndLifecycle(t *testing.T, mode string, opts stagerOpts) {
 	}
 
 	c2HttpPortStr := fmt.Sprintf("%d", c2Port+1)
-	preflightURL := fmt.Sprintf("http://127.0.0.1:%s/preflight-test", c2HttpPortStr)
-	if mode == def.C2ChannelModeH2Conn {
-		preflightURL = fmt.Sprintf("https://127.0.0.1:%s/preflight-test", c2PortStr)
-	}
 
 	malleableCfg := def.MalleableHTTPConfig{
 		C2Path:        "/api/v1/telemetry",
@@ -261,9 +257,6 @@ func runAgentEndToEndLifecycle(t *testing.T, mode string, opts stagerOpts) {
 		C2ChannelMode:    mode,
 		CAPEM:            string(caCertData),
 		C2Routes:         routes,
-		PreflightEnabled: true,
-		PreflightURL:     preflightURL,
-		PreflightMethod:  "GET",
 		MalleableC2:      malleableCfg,
 	}
 
@@ -294,9 +287,6 @@ func runAgentEndToEndLifecycle(t *testing.T, mode string, opts stagerOpts) {
 		AgentTag:         agentTag,
 		ModulePath:       "",
 		CCTimeout:        1000,
-		PreflightEnabled: true,
-		PreflightURL:     preflightURL,
-		PreflightMethod:  "GET",
 		IsRunByStager:    true,
 		MalleableC2:      malleableCfg,
 	}

@@ -35,12 +35,6 @@ func TestInitConfig_Comprehensive(t *testing.T) {
 		SSHDShellPort:             "2222",
 		MeshGossipPort:            "9000",
 		CCTimeout:                 5000,
-		PreflightEnabled:          true,
-		PreflightURL:              "http://example.com",
-		PreflightMethod:           "GET",
-		PreflightHeaders:          map[string]string{"X-Test": "True"},
-		PreflightIntervalMin:      30,
-		PreflightIntervalMax:      120,
 	}
 
 	// 2. Marshal to CBOR
@@ -115,24 +109,6 @@ func TestInitConfig_Comprehensive(t *testing.T) {
 	}
 	if RuntimeConfig.MeshGossipPort != originalCfg.MeshGossipPort {
 		t.Errorf("MeshGossipPort mismatch: got %s, want %s", RuntimeConfig.MeshGossipPort, originalCfg.MeshGossipPort)
-	}
-	if RuntimeConfig.PreflightEnabled != originalCfg.PreflightEnabled {
-		t.Errorf("PreflightEnabled mismatch: got %v, want %v", RuntimeConfig.PreflightEnabled, originalCfg.PreflightEnabled)
-	}
-	if RuntimeConfig.PreflightURL != originalCfg.PreflightURL {
-		t.Errorf("PreflightURL mismatch: got %s, want %s", RuntimeConfig.PreflightURL, originalCfg.PreflightURL)
-	}
-	if RuntimeConfig.PreflightMethod != originalCfg.PreflightMethod {
-		t.Errorf("PreflightMethod mismatch: got %s, want %s", RuntimeConfig.PreflightMethod, originalCfg.PreflightMethod)
-	}
-	if RuntimeConfig.PreflightMethod != originalCfg.PreflightMethod {
-		t.Errorf("PreflightMethod mismatch: got %s, want %s", RuntimeConfig.PreflightMethod, originalCfg.PreflightMethod)
-	}
-	if RuntimeConfig.PreflightIntervalMin != originalCfg.PreflightIntervalMin {
-		t.Errorf("PreflightIntervalMin mismatch: got %d, want %d", RuntimeConfig.PreflightIntervalMin, originalCfg.PreflightIntervalMin)
-	}
-	if RuntimeConfig.PreflightIntervalMax != originalCfg.PreflightIntervalMax {
-		t.Errorf("PreflightIntervalMax mismatch: got %d, want %d", RuntimeConfig.PreflightIntervalMax, originalCfg.PreflightIntervalMax)
 	}
 	if RuntimeConfig.CAPEM != originalCfg.CAPEM {
 		t.Errorf("CAPEM mismatch: got %s, want %s", RuntimeConfig.CAPEM, originalCfg.CAPEM)

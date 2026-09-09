@@ -22,7 +22,6 @@ func StartC2H2StreamServer() {
 	}
 
 	mux := http.NewServeMux()
-	registerPreflightFeature(mux)
 	registerC2H2StreamAcceptHandler(mux, channelWrapper)
 
 	listener := setupC2TLSListener()

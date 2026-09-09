@@ -37,12 +37,6 @@ func SaveConfigJSON() (err error) {
 		SSHHostKey:                string(live.RuntimeConfig.SSHHostKey),
 		SSHDShellPort:             live.RuntimeConfig.SSHDShellPort,
 		MeshGossipPort:            live.RuntimeConfig.MeshGossipPort,
-		PreflightEnabled:          live.RuntimeConfig.PreflightEnabled,
-		PreflightURL:              live.RuntimeConfig.PreflightURL,
-		PreflightMethod:           live.RuntimeConfig.PreflightMethod,
-		PreflightHeaders:          live.RuntimeConfig.PreflightHeaders,
-		PreflightIntervalMin:      live.RuntimeConfig.PreflightIntervalMin,
-		PreflightIntervalMax:      live.RuntimeConfig.PreflightIntervalMax,
 		CAPEM:                     live.RuntimeConfig.CAPEM,
 		CAFingerprint:             live.RuntimeConfig.CAFingerprint,
 		C2TransportProxy:          live.RuntimeConfig.C2TransportProxy,
@@ -138,12 +132,6 @@ func InitConfigFile(cc_host string) (err error) {
 
 	// time intervals
 
-	// Preflight default
-	live.RuntimeConfig.PreflightEnabled = true
-	if live.RuntimeConfig.PreflightURL == "" {
-		live.RuntimeConfig.PreflightURL = fmt.Sprintf("http://%s/%s", cc_host, util.RandStr(util.RandInt(5, 10)))
-	}
-	live.RuntimeConfig.PreflightMethod = "POST"
 	live.RuntimeConfig.AgentSocksTimeout = 0 // disable timeout by default, leave it to the OS
 
 	// sign agent UUID

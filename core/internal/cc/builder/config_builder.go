@@ -2,7 +2,6 @@ package builder
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -45,9 +44,6 @@ type AgentConfig struct {
 // MakeConfig takes the generalized AgentConfig options and orchestrates the
 // filling of the JSON payload and generating/updating certificates as required.
 func MakeConfig(opts AgentConfig) error {
-	// Preflight check is now enabled by default for better stealth
-	live.RuntimeConfig.PreflightEnabled = true
-
 	// read existing config when possible
 	if util.IsExist(live.EmpConfigFile) {
 		logging.Infof("Reading config from existing %s", live.EmpConfigFile)
@@ -171,36 +167,6 @@ func MakeConfig(opts AgentConfig) error {
 		live.RuntimeConfig.OperatorIdleTimeout = *opts.OperatorIdleTimeout
 	}
 
-	// Preflight / Hybrid Mode intervals
-	if live.RuntimeConfig.PreflightURL == "" {
-		// generate new if empty
-		if live.RuntimeConfig.C2ChannelMode == def.C2ChannelModePlainHTTP {
-			live.RuntimeConfig.PreflightURL = fmt.Sprintf("http://%s:%s/%s", live.RuntimeConfig.CCAddress, live.RuntimeConfig.CCHTTPPort, util.RandStr(util.RandInt(5, 10)))
-		} else {
-			live.RuntimeConfig.PreflightURL = fmt.Sprintf("https://%s:%s/%s", live.RuntimeConfig.CCAddress, live.RuntimeConfig.CCH2Port, util.RandStr(util.RandInt(5, 10)))
-		}
-	} else {
-		// synchronise host and port with CCAddress
-		u, err := url.Parse(live.RuntimeConfig.PreflightURL)
-		if err == nil {
-			if live.RuntimeConfig.C2ChannelMode == def.C2ChannelModePlainHTTP {
-				u.Host = fmt.Sprintf("%s:%s", live.RuntimeConfig.CCAddress, live.RuntimeConfig.CCHTTPPort)
-				u.Scheme = "http"
-			} else {
-				u.Host = fmt.Sprintf("%s:%s", live.RuntimeConfig.CCAddress, live.RuntimeConfig.CCH2Port)
-				u.Scheme = "https"
-			}
-			live.RuntimeConfig.PreflightURL = u.String()
-		}
-	}
-	if live.RuntimeConfig.PreflightIntervalMin == 0 {
-		live.RuntimeConfig.PreflightIntervalMin = util.RandInt(30, 120)
-	}
-	if live.RuntimeConfig.PreflightIntervalMax == 0 {
-		live.RuntimeConfig.PreflightIntervalMax = live.RuntimeConfig.PreflightIntervalMin + util.RandInt(30, 300)
-	}
-	logging.Infof("Conditional C2 (Hybrid Mode) beacon interval: %d - %d seconds", live.RuntimeConfig.PreflightIntervalMin, live.RuntimeConfig.PreflightIntervalMax)
-
 	// Mesh / P2P mode
 	live.RuntimeConfig.IsP2PEnabled = opts.IsP2PEnabled
 	live.RuntimeConfig.IsDirectC2Enabled = opts.IsDirectC2
@@ -263,7 +229,7 @@ func MakeConfig(opts AgentConfig) error {
 
 	switch {
 	case live.RuntimeConfig.IsP2PEnabled && live.RuntimeConfig.IsDirectC2Enabled:
-		logging.Infof("Mode: Gateway (P2P mesh + direct C2 + preflight)")
+		logging.Infof("Mode: Gateway (P2P mesh + direct C2)")
 	case live.RuntimeConfig.IsP2PEnabled:
 		logging.Infof("Mode: Silent Node (P2P mesh only, no direct C2)")
 	default:

@@ -101,15 +101,6 @@ type Config struct {
 	SSHHostKey                []byte `cbor:"14,keyasint"` // SSH host (private) key (PEM string), used by remote forwarding server
 	SSHDShellPort             string `cbor:"16,keyasint"` // interactive shell
 	MeshGossipPort            string `cbor:"17,keyasint"` // UDP/TCP port for gossip (memberlist)
-	// Preflight Config
-	PreflightEnabled bool              `cbor:"20,keyasint"` // Enable preflight check
-	PreflightURL     string            `cbor:"21,keyasint"` // URL for preflight check
-	PreflightMethod  string            `cbor:"22,keyasint"` // HTTP method (GET/POST) TODO: Implement method selection in client
-	PreflightHeaders map[string]string `cbor:"23,keyasint"` // Headers for preflight request
-	// Beacon interval for Hybrid Mode
-	PreflightIntervalMin int `cbor:"29,keyasint"` // seconds
-	PreflightIntervalMax int `cbor:"30,keyasint"` // seconds
-
 	CAPEM            string `cbor:"24,keyasint"` // CA cert from server side
 	CAFingerprint    string `cbor:"25,keyasint"` // CA cert fingerprint
 	C2TransportProxy string `cbor:"26,keyasint"` // proxy for C2 transport
@@ -138,7 +129,7 @@ type Config struct {
 
 	// Mesh / P2P configuration
 	IsP2PEnabled        bool   `cbor:"70,keyasint"` // set by generate --p2p
-	IsDirectC2Enabled   bool   `cbor:"71,keyasint"` // set by generate --direct-c2 (Gateway mode: P2P + direct C2 + preflight)
+	IsDirectC2Enabled   bool   `cbor:"71,keyasint"` // set by generate --direct-c2 (Gateway mode: P2P + direct C2)
 	P2PTransport        string `cbor:"72,keyasint"` // Transport for P2P mesh (e.g. kcp, mtls)
 	CamouflageCertOrg   string `cbor:"73,keyasint"` // Camouflage cert organization (random if empty)
 	CamouflageCertCN    string `cbor:"74,keyasint"` // Camouflage cert common name (random if empty)

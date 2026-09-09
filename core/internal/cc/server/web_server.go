@@ -96,9 +96,8 @@ func InitWebServer(port int) {
 	// 设置路由
 	r := mux.NewRouter()
 
-	// 注册虚拟 operator，使 agent preflight 检查通过
+	// Web UI counts as an online operator for presence tracking
 	MarkOperatorOnline("web-ui")
-	logging.Infof("Registered web-ui as virtual operator for preflight checks")
 
 	// Set FTP ExecCmd to send commands directly via agents.SendCmd with proper job tracking
 	ftp.ExecCmd = func(cmd, jobID, tag string) error {

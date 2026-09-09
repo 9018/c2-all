@@ -45,7 +45,6 @@ func StartC2HTTPServer() {
 	network.StopEmpHTTPServer()
 
 	mux := http.NewServeMux()
-	registerPreflightFeature(mux)
 
 	c2Path := live.RuntimeConfig.MalleableC2.C2Path
 	if c2Path == "" {

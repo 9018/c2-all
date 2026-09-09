@@ -1294,3 +1294,20 @@
 ### Code Refactoring
 
 * separate `core` and `server`, adopting operator-server mode (WIP) ([d4d52b1](https://github.com/jm33-m0/emp3r0r/commit/d4d52b1372122fd6bf9847349f09ddf8c2ef1de5))
+
+## 2026-09-10 preflight（条件 C2 直连）机制移除
+
+relay-only 架构下 agent 直连 CC 的 HTTP preflight 是唯一暴露 CC 真实位置的
+流量，且其"判断 CC 是否在线"的职责已被常在的 CF relay 完全取代。整体移除：
+
+- 删 `core/lib/preflight/`（client/server/shared）、`core/cmd/preflight/`（独立测试命令）
+- 删 CC 端 `preflight_feature.go` 及其在 HTTP/H2 server 的注册
+- 删 agent 端 `CheckC2Condition` 调用块（agent.go connect 循环）
+- 删 config 五字段（PreflightEnabled/URL/Method/Headers + BeaconInterval min/max），
+  CBOR/JSON 字段编号保留空洞（旧 agent 的多余字段解码时被忽略）
+- 删 builder 的 preflight 默认启用逻辑（原为"stealth 默认开启"，实为直连暴露）
+- 测试同步清理（config/tls/stager e2e）
+
+**升级注意**：存量 agent 若内嵌 preflight_enabled=true 的旧配置，升级 CC 到
+本版本后其 preflight 请求将永远 404 → agent 循环退避无法 checkin。需在旧 CC
+上重新生成 agent 替换，或接受一次性失联重新部署。
