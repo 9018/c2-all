@@ -15,11 +15,9 @@
 package transport
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -192,22 +190,13 @@ func RefreshECHConfig(doh, host string) bool {
 	if err != nil {
 		return false
 	}
-	client := &http.Client{
-		Timeout: 6 * time.Second,
-		Transport: &http.Transport{
-			ForceAttemptHTTP2: false,
-			DialTLSContext:    dohDialTLS, // browser fingerprint, resolved via the agent's DoH
-		},
+	secret := ""
+	if u, uerr := url.Parse(doh); uerr == nil {
+		secret = u.Query().Get("secret")
 	}
-	resp, err := client.Post(doh, "application/dns-message", bytes.NewReader(wire))
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// browser-dressed POST: secret via the Authorization header, never the
+	// URL query (which ends up in access logs)
+	body, err := DoHPost(DoHHTTPClient(nil), doh, secret, wire)
 	if err != nil {
 		return false
 	}

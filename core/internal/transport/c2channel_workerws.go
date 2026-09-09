@@ -471,7 +471,10 @@ func parseRelayURL(raw string) (*url.URL, string, error) {
 	if role != "agent" && role != "cc" {
 		return nil, "", fmt.Errorf("bad relay role %q", role)
 	}
-	_ = u.Query().Get("secret") // secret validated server-side; kept for compat
+	secret := u.Query().Get("secret") // moved to the Authorization header at dial time
+	if secret == "" {
+		return nil, "", fmt.Errorf("relay URL %s: missing secret", u.Redacted())
+	}
 	return u, role, nil
 }
 
@@ -494,9 +497,30 @@ func dialRelay(ctx context.Context, raw string) (*relayConn, *RelayRoomMsg, erro
 		}
 		wsURL = scheme + "://" + strings.TrimPrefix(wsURL, u.Scheme+"://")
 	}
+	// Request obfuscation: the wire request must look like a browser
+	// opening a same-origin WebSocket on an ordinary web app. The secret
+	// and role ride headers (Authorization / X-Relay-Role) instead of the
+	// query string — URLs land in every access log; headers don't.
+	wsh := u.Query()
+	wsHeaders := http.Header{
+		"User-Agent":      {BrowserUserAgent()},
+		"Accept-Language": {"en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"},
+		"Cache-Control":  {"no-cache"},
+		"Pragma":          {"no-cache"},
+		"Origin":         {"https://" + u.Host},
+	}
+	if s := wsh.Get("secret"); s != "" {
+		wsHeaders.Set("Authorization", "Bearer "+s)
+	}
+	if r := wsh.Get("role"); r != "" {
+		wsHeaders.Set("X-Relay-Role", r)
+	}
+	// strip the query from the request URL
+	u.RawQuery = ""
+	wsURL = u.String()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		conn, resp, err := relayDialer.DialContext(ctx, wsURL, nil)
+		conn, resp, err := relayDialer.DialContext(ctx, wsURL, wsHeaders)
 		if err != nil {
 			if resp != nil {
 				// 409 + X-Relay-Migrated-To: the old deployment was repointed

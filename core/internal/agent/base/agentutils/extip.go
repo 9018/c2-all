@@ -111,7 +111,8 @@ func relayExternalIP(timeout time.Duration) string {
 	if secret == "" {
 		return ""
 	}
-	endpoint := "https://" + u.Host + "/extip?secret=" + url.QueryEscape(secret)
+	// no secret in the URL query (access logs); it rides the header
+	endpoint := "https://" + u.Host + "/extip"
 
 	client := &http.Client{
 		Timeout: timeout,
@@ -129,6 +130,7 @@ func relayExternalIP(timeout time.Duration) string {
 	if err != nil {
 		return ""
 	}
+	transport.BrowserRequestHeaders(req.Header, secret)
 	resp, err := client.Do(req)
 	if err != nil {
 		return ""

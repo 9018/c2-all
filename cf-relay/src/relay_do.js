@@ -147,7 +147,7 @@ export class RelayDO {
                 headers: { 'X-Relay-Migrated-To': this.env.MIGRATE_URL, 'Access-Control-Expose-Headers': 'X-Relay-Migrated-To' },
             });
         }
-        const role = url.searchParams.get('role') || 'agent';
+        const role = request.headers.get('x-relay-role') || url.searchParams.get('role') || 'agent';
         if (role !== 'cc' && role !== 'agent') {
             return new Response('role must be cc or agent', { status: 400 });
         }

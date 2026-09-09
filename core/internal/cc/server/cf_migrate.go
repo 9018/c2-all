@@ -138,7 +138,7 @@ func MigrateRelayTo(targetID, reason string) error {
 	if err := waitDNSReady(relayHostOf(relayBase), 120*time.Second); err != nil {
 		return fmt.Errorf("dns warmup for %s: %w", relayBase, err)
 	}
-	if err := checkWorkerHealth(relayBase, 60*time.Second); err != nil {
+	if err := checkWorkerHealth(relayBase, cfg.SharedSecret, 60*time.Second); err != nil {
 		return fmt.Errorf("health check on %s: %w", relayBase, err)
 	}
 

@@ -43,7 +43,7 @@ func TestDeployRelayWorkerToStandby(t *testing.T) {
 		t.Fatalf("deployRelayWorker: %v", err)
 	}
 	t.Logf("deployed relay at %s", base)
-	if err := checkWorkerHealth(base, 30e9); err != nil {
+	if err := checkWorkerHealth(base, secret, 30e9); err != nil {
 		t.Fatalf("health check: %v", err)
 	}
 	t.Logf("health OK for %s", base)
@@ -86,7 +86,7 @@ func TestDeployRelayWorkerToAllAccounts(t *testing.T) {
 		// from networks where workers.dev is blocked (the deploy already
 		// validated the upload, DO binding and route wiring)
 		if a.Domain != "" {
-			if err := checkWorkerHealth(base, 30e9); err != nil {
+			if err := checkWorkerHealth(base, secret, 30e9); err != nil {
 				t.Errorf("health on %s: %v", base, err)
 			} else {
 				t.Logf("health OK for %s", base)
