@@ -229,7 +229,13 @@ export function FileManager() {
       <div className="h-full flex items-center justify-center text-gray-500">
         <div className="text-center">
           <Folder className="w-12 h-12 mx-auto mb-4 opacity-30" />
-          <p>Select an agent to browse files</p>
+          <p className="mb-4">Select an agent to browse files</p>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('navigate-to', { detail: 'agents' }))}
+            className="px-4 py-2 bg-emp3r0r-500/20 hover:bg-emp3r0r-500/30 text-emp3r0r-400 rounded-lg transition-colors text-sm"
+          >
+            去选择 Agent
+          </button>
         </div>
       </div>
     )

@@ -171,12 +171,6 @@ export function Layout() {
             icon="💻"
           />
           <NavButton
-            active={activeView === 'files'}
-            onClick={() => handleNavigate('files')}
-            label="Files"
-            icon="📁"
-          />
-          <NavButton
             active={activeView === 'modules'}
             onClick={() => handleNavigate('modules')}
             label="Modules"

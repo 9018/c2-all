@@ -10,15 +10,17 @@ import {
   ChevronRight,
   Globe,
   X,
-  Terminal
+  Terminal,
+  Folder
 } from 'lucide-react'
 import { Emp3r0rAgent } from '@/types'
 
-function AgentCard({ agent, isActive, onSelect, onConsole }: { 
+function AgentCard({ agent, isActive, onSelect, onConsole, onFiles }: { 
   agent: Emp3r0rAgent
   isActive: boolean
   onSelect: () => void
   onConsole: () => void
+  onFiles: () => void
 }) {
   const lastSeen = new Date(agent.LastSeen)
   // Online window matches the agent hello cadence: relay transports back
@@ -119,6 +121,16 @@ function AgentCard({ agent, isActive, onSelect, onConsole }: {
         >
           <Terminal className="w-3 h-3 md:w-4 md:h-4" />
           <span>Console</span>
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onFiles()
+          }}
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-emp3r0r-500/20 hover:bg-emp3r0r-500/30 text-emp3r0r-400 rounded-lg transition-colors text-xs md:text-sm"
+        >
+          <Folder className="w-3 h-3 md:w-4 md:h-4" />
+          <span>Files</span>
         </button>
         <button
           onClick={retestExternalIP}
@@ -253,6 +265,12 @@ export function AgentList() {
     window.dispatchEvent(new CustomEvent('navigate-to', { detail: 'console' }))
   }
 
+  const handleFiles = async (agent: Emp3r0rAgent) => {
+    await setActiveAgent(agent.Tag)
+    // 文件管理是每-agent 的操作：从 agent 卡片进入
+    window.dispatchEvent(new CustomEvent('navigate-to', { detail: 'files' }))
+  }
+
   const handleForget = async (uuid: string) => {
     if (confirm('Are you sure you want to forget this agent?')) {
       await forgetAgent(uuid)
@@ -317,6 +335,7 @@ export function AgentList() {
                 isActive={agent.Tag === activeAgent?.Tag}
                 onSelect={() => handleSelect(agent)}
                 onConsole={() => handleConsole(agent)}
+                onFiles={() => handleFiles(agent)}
               />
             ))
           )}

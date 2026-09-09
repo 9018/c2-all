@@ -1,5 +1,5 @@
 import { useStore } from '@/stores/useStore'
-import { Monitor, Boxes, Terminal, Shield, Folder, Cloud } from 'lucide-react'
+import { Monitor, Boxes, Terminal, Shield, Cloud } from 'lucide-react'
 
 interface SidebarProps {
   onNavigate: (view: string) => void
@@ -33,12 +33,6 @@ export function Sidebar({ onNavigate, activeView }: SidebarProps) {
       label: 'Console',
       icon: Terminal,
       description: 'Execute commands',
-    },
-    {
-      id: 'files',
-      label: 'Files',
-      icon: Folder,
-      description: 'Browse files',
     },
     {
       id: 'modules',
