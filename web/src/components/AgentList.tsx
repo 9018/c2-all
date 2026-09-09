@@ -21,7 +21,10 @@ function AgentCard({ agent, isActive, onSelect, onConsole }: {
   onConsole: () => void
 }) {
   const lastSeen = new Date(agent.LastSeen)
-  const isOnline = Date.now() - lastSeen.getTime() < 60000
+  // Online window matches the agent hello cadence: relay transports back
+  // off to a 2-4min liveness probe (DO request billing), so a healthy
+  // idle agent's LastSeen can be minutes old.
+  const isOnline = Date.now() - lastSeen.getTime() < 5 * 60 * 1000
 
   // External IP retest: fire-and-forget command; the agent_update WS
   // broadcast refreshes the store, which flips the button back via effect.

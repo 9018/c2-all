@@ -88,27 +88,47 @@ export class RelayDO {
         return this.ctx.getWebSockets(`tag:${tag}`)[0] || null;
     }
 
-    /** numeric tag byte for agent->CC frames (a1 -> 0x01); agents without a
-     *  readable tag fall back to byte 0, which is never legitimately assigned
-     *  (counter starts at 1) so it can only collide with other unreadable-tag
-     *  agents — degraded, never misrouted. */
+    /** numeric tag byte for agent->CC frames (a1 -> 0x01). Allocated tags are
+     *  always 1..254 (0x00 = unreadable fallback, 0xFF = broadcast), so the
+     *  bijection with socketForTag(`a${byte}`) holds. Agents whose tags are
+     *  not readable (or overflow tags) fall back to byte 0, which is never
+     *  legitimately assigned — degraded, never misrouted. */
     tagByteOf(ws) {
         const tag = this.tagOf(ws);
         if (!tag) return 0;
         const n = parseInt(String(tag).slice(1), 10);
-        return Number.isFinite(n) ? n & 0xff : 0;
+        return Number.isFinite(n) && n >= 1 && n <= 254 ? n : 0;
     }
 
     send(ws, obj) {
         try { ws.send(JSON.stringify(obj)); } catch { /* socket already dead */ }
     }
 
-    /** Monotonic agent counter persisted in storage so tags never collide
-     *  across DO evictions/restarts (a1, a2, ...; wraps at 255 by design). */
+    /** Agent tag allocation, persisted in storage so tags never collide
+     *  across DO evictions/restarts.
+     *
+     *  The wire format carries the tag as ONE byte (agent->CC framing,
+     *  CC->agent targeting), so the tag number must stay in 1..254 —
+     *  0x00 is the fallback for unreadable tags and 0xFF is broadcast.
+     *  The counter therefore wraps at 254 and skips numbers whose tag is
+     *  still held by a connected agent (tag strings and tag bytes must
+     *  stay in bijection or the CC's targeted frames get dropped on the
+     *  floor by socketForTag()). */
     async nextAgentTag() {
         let n = (await this.ctx.storage.get('nextTag')) || 1;
-        await this.ctx.storage.put('nextTag', n + 1);
-        return `a${n}`;
+        let probe = n > 254 ? 1 : n;
+        for (let i = 0; i < 254; i++) {
+            const tag = `a${probe}`;
+            if (this.ctx.getWebSockets(`tag:${tag}`).length === 0) {
+                await this.ctx.storage.put('nextTag', probe >= 254 ? 1 : probe + 1);
+                return tag;
+            }
+            probe = probe >= 254 ? 1 : probe + 1;
+        }
+        // 254 concurrent agents in one room: give up on routability rather
+        // than blocking the join (tagByteOf falls back to byte 0).
+        await this.ctx.storage.put('nextTag', probe >= 254 ? 1 : probe + 1);
+        return `overflow-${Date.now()}`;
     }
 
     // ---- entry point ------------------------------------------------------------

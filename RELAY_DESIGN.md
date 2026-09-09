@@ -241,3 +241,36 @@ analytics，60s 缓存 + 手动刷新）：
 `{"api_token": "cfut_...", "account_id": "..."}`；API：`GET /api/relay-quota`。
 当前实测：DO 全月仅 0.08 GB-s（旧版常驻一天 ≈ 10,800 GB-s）——Hibernation
 改写的收益直接可见。
+
+## Hello 退避 + tag 环绕修复（2026-09-09）
+
+### 配额根因（续）：requests 维度
+
+Hibernation 修好了 duration（0.2%），但实测稳态 **5.14 DO req/min**（1 agent）≈
+222k/月，13.5 天烧穿免费 100k。根因是写法：`MsgTunneler` 的 hello 循环用
+`TakeASnap()`（5-60s 随机）——这是 http_poll 拉取命令的节奏，worker_ws 长连接
+下命令由 CC 推送，hello 只剩存活探测作用，而 WS 协议层 ping（edge 免费应答）
+早已覆盖保活。
+
+**修复**：`poll.go relayHelloBackoff`——relay 传输下空闲 hello 退避 120-240s，
+仍在 CC 10min handshakeTimeout 内；http_poll 保持原节奏（hello=拉命令）。
+前端在线窗口 60s → 5min 联动。**效果：~10 倍降频 → 每 agent 月 requests
+222k → ~25k，免费额度从撑 0.45 个 agent 变为 4 个。**
+
+### 顺带撞出的老 bug：tag 256 环绕
+
+修复验证时 agent checkin ACK 全部超时，`EnrichedPeerList` 为零。定位：DO 给
+agent 的 tag 到了 `a279`，而线协议只有 1 字节：`279 & 0xff = 23`。CC 定向回包
+`[23][ACK]`，DO 查 `socketForTag("a23")`——真身是 a279，**帧静默丢弃**。
+旧版 `nextTag` 在内存（DO 重启归 1）从未触界；Hibernation 版把它持久化进
+storage，跨休眠累积突破 255 后引爆。
+
+**修复**：tag 分配环绕在 254（0x00=不可读兜底、0xFF=广播保留），且跳过仍被
+在线 agent 持有的号（tag 字符串与 byte 严格双射，否则 CC 定向帧必丢）。
+协议回归 16/16 复验通过（含 wrap 后路由、75s 休眠重建）。
+
+### 部署后实测
+
+- hello 间隔 2:14 / 2:57（backoff 区间内）
+- 命令往返恢复（TAGFIXED_OK）
+- 在线判定（LastSeen < 5min）正常

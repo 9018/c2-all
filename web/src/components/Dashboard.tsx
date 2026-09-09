@@ -59,7 +59,7 @@ export function Dashboard() {
 
   const onlineAgents = agents.filter((a) => {
     const lastSeen = new Date(a.LastSeen)
-    return Date.now() - lastSeen.getTime() < 60000
+    return Date.now() - lastSeen.getTime() < 5 * 60 * 1000 // matches agent hello backoff (2-4min)
   })
 
   const windowsAgents = agents.filter((a) => a.GOOS === 'windows')
@@ -233,7 +233,7 @@ export function Dashboard() {
                   </thead>
                   <tbody>
                     {agents.map((agent) => {
-                      const isOnline = Date.now() - new Date(agent.LastSeen).getTime() < 60000
+                      const isOnline = Date.now() - new Date(agent.LastSeen).getTime() < 5 * 60 * 1000
                       return (
                         <tr 
                           key={agent.UUID} 
@@ -279,7 +279,7 @@ export function Dashboard() {
               {/* Mobile Agent Cards */}
               <div className="md:hidden space-y-3">
                 {agents.map((agent) => {
-                  const isOnline = Date.now() - new Date(agent.LastSeen).getTime() < 60000
+                  const isOnline = Date.now() - new Date(agent.LastSeen).getTime() < 5 * 60 * 1000
                   return (
                     <div
                       key={agent.UUID}
