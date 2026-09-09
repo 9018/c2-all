@@ -274,3 +274,15 @@ storage，跨休眠累积突破 255 后引爆。
 - hello 间隔 2:14 / 2:57（backoff 区间内）
 - 命令往返恢复（TAGFIXED_OK）
 - 在线判定（LastSeen < 5min）正常
+
+### 修复后实测（单 agent 稳态，10 分钟增量测量）
+
+- **1.20 DO req/min**（旧 5.14 → 4.3x 降频）
+- 月 requests：222k → **~52k**（免费 100k 的 52%）
+- 免费额度：撑 **~2 个 agent** 7×24（旧：0.45 个）
+- Workers Paid $5/月（1M req）：撑 **~38 个 agent**
+- duration 依旧 ~0.2%，Workers requests（WS 建立）依旧 ~0
+
+注：hello 双向各计 1 次唤醒（agent→DO、CC→DO），实测比理论 0.67/min 略高
+（CC 侧附带消息）。再拉长间隔可到 4-8min（CC 10min 超时内）换更省，但在线
+显示粒度变粗——2-4min 是当前平衡点。3+ 个长驻 agent 建议直接 $5/月。
