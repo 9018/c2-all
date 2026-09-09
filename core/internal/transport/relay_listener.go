@@ -14,9 +14,19 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"sync"
 	"time"
 )
+
+// HostOfURL extracts the host part of a URL.
+func HostOfURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Hostname()
+}
 
 // RelayListener masquerades as a net.Listener. Each Accept() returns a
 // virtual net.Conn backed by one agent's relay WebSocket.

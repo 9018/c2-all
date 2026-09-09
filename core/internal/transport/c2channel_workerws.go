@@ -110,11 +110,10 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	// Force IPv4: CF edges are IPv4-reachable everywhere, while hosts with a
 	// configured-but-unrouted IPv6 stack would otherwise fail the dial with
 	// ENETUNREACH before falling back.
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
-	if err != nil {
-		return nil, err
+	dial := func() (net.Conn, error) {
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	}
-	return browserHandshake(conn, addr)
+	return browserTLSConnect(dial, addr)
 }
 
 // browserHandshake wraps an established TCP connection in uTLS with a
@@ -159,31 +158,137 @@ func browserHandshake(conn net.Conn, hostport string) (*utls.UConn, error) {
 // bootstrap lookup). Pins are tried in order. Otherwise addr is resolved
 // via net.DefaultResolver — the agent's DoH when installed.
 func BrowserLikeTLSDial(ctx context.Context, addr string, pinnedIPs []string) (net.Conn, error) {
-	if len(pinnedIPs) > 0 {
-		var lastErr error
-		for _, pin := range pinnedIPs {
-			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", pin)
-			if err != nil {
-				lastErr = err
-				continue
+	dial := func() (net.Conn, error) {
+		if len(pinnedIPs) > 0 {
+			var lastErr error
+			for _, pin := range pinnedIPs {
+				conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", pin)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				return conn, nil
 			}
-			uc, err := browserHandshake(conn, addr)
-			if err != nil {
-				lastErr = err
-				continue
+			if lastErr != nil {
+				return nil, lastErr
 			}
-			return uc, nil
+			return nil, fmt.Errorf("browser-like dial: no pinned IP for %s", addr)
 		}
-		if lastErr != nil {
-			return nil, lastErr
-		}
-		return nil, fmt.Errorf("browser-like dial: no pinned IP for %s", addr)
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	}
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
+	return browserTLSConnect(dial, addr)
+}
+
+// browserTLSConnect dials via the given closure and handshakes with ECH
+// when a fresh, non-disabled ECHConfig is cached for the host — falling
+// back to a fresh plain-SNI connection when ECH is rejected (CF rotated
+// the config, or a middlebox resets ECH ClientHellos). Availability first:
+// a failed ECH attempt disables ECH for a few minutes and triggers a
+// background config refresh.
+func browserTLSConnect(dial func() (net.Conn, error), hostport string) (*utls.UConn, error) {
+	host := hostnameOfHostPort(hostport)
+	if e := echUsable(host); e != nil {
+		conn, err := dial()
+		if err == nil {
+			uconn, echErr := browserHandshakeECH(conn, hostport, e)
+			if echErr == nil {
+				return uconn, nil
+			}
+			logging.Infof("ECH handshake with %s failed (%v), falling back to plain SNI", host, echErr)
+			echDisable(host, 5*time.Minute)
+			refreshECHBackground(host)
+		}
+	}
+	conn, err := dial()
 	if err != nil {
 		return nil, err
 	}
-	return browserHandshake(conn, addr)
+	return browserHandshake(conn, hostport)
+}
+
+// hostnameOfHostPort splits "host:port" (or returns the input when it has
+// no port).
+func hostnameOfHostPort(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
+// echBrowserSpecs returns browser specs that are known to work with the
+// uTLS ECH path: Chrome and iOS. Firefox's spec trips a server-side
+// decode error in the ECH inner/outer extension compression (2026-09,
+// utls v1.8.2) — it stays available for plain connections only.
+func echBrowserSpecs() ([]*utls.ClientHelloSpec, error) {
+	ids := []utls.ClientHelloID{utls.HelloChrome_Auto, utls.HelloIOS_Auto}
+	var specs []*utls.ClientHelloSpec
+	for _, id := range ids {
+		spec, err := utls.UTLSIdToSpec(id)
+		if err != nil {
+			return nil, err
+		}
+		for i, ext := range spec.Extensions {
+			if _, ok := ext.(*utls.ALPNExtension); ok {
+				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}}
+			}
+		}
+		specs = append(specs, &spec)
+	}
+	return specs, nil
+}
+
+// browserHandshakeECH performs a browser-fingerprint handshake where the
+// OUTER ClientHello masks the relay hostname behind the ECH public name;
+// the HPKE-encrypted inner keeps the real SNI. Requires uTLS's spec path
+// (ApplyPreset) + Config.EncryptedClientHelloConfigList.
+func browserHandshakeECH(conn net.Conn, hostport string, e *echEntry) (*utls.UConn, error) {
+	host := hostnameOfHostPort(hostport)
+	cfg := &utls.Config{
+		ServerName:                    host, // the INNER SNI; cert validation target
+		RootCAs:                       relayTLSRootCAs,
+		MinVersion:                    utls.VersionTLS13,
+		EncryptedClientHelloConfigList: e.list,
+	}
+	specs, err := echBrowserSpecs()
+	if err != nil || len(specs) == 0 {
+		conn.Close()
+		return nil, fmt.Errorf("ech specs: %w", err)
+	}
+	spec := specs[util.RandInt(0, len(specs))]
+	hasECH := false
+	for i, ext := range spec.Extensions {
+		if _, ok := ext.(*utls.SNIExtension); ok {
+			// the OUTER SNI must be the public name — the library does not do
+			// this for the spec-based path
+			spec.Extensions[i] = &utls.SNIExtension{ServerName: e.publicName}
+		}
+		if _, ok := ext.(utls.EncryptedClientHelloExtension); ok {
+			hasECH = true // Chrome/iOS specs carry a GREASE ECH ext already
+		}
+	}
+	if !hasECH {
+		// marker the ECH marshaler replaces with the real payload. Never
+		// append when the spec already has one — a doubled ECH extension
+		// yields a malformed outer the server rejects with decode_error.
+		spec.Extensions = append(spec.Extensions, &utls.GREASEEncryptedClientHelloExtension{})
+	}
+	uconn := utls.UClient(conn, cfg, utls.HelloCustom)
+	if err := uconn.ApplyPreset(spec); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	uconn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := uconn.Handshake(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return uconn, nil
+}
+
+// dohDialTLS is the DoH fetch transport dialer: browser fingerprint,
+// resolved through net.DefaultResolver (the agent's DoH when installed).
+func dohDialTLS(ctx context.Context, network, addr string) (net.Conn, error) {
+	return BrowserLikeTLSDial(ctx, addr, nil)
 }
 
 var relayDialer = &websocket.Dialer{

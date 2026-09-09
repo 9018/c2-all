@@ -1334,3 +1334,27 @@ relay listener 首次拨号失败改为永久退避重试（新域名 DNS 传播
 
 实测：两次跨账号迁移（f8b31eff→de125516→6f821d90），agent 全自动
 follow、checkin、命令往返全通。
+
+## 2026-09-10 ECH（加密 ClientHello）——SNI 掩码
+
+Agent 与 CC 对 relay 的全部 TLS 连接现在默认走 ECH：outer ClientHello 的 SNI 是
+cloudflare-ech.com（ECH 公共名），真实 relay 域名只存在于 HPKE 加密的 inner。
+抓包者能看到的内容从"relay 域名 + 浏览器指纹"降为"cloudflare-ech.com +
+浏览器指纹"——与所有其他 ECH 用户不可区分。
+
+- 配置获取：启动 / failover 重定位时经 relay Worker 的 /dns（DoH POST）查
+  DNS HTTPS(type 65) 记录，解析 ech= 参数得 ECHConfigList（CF zone 默认
+  已发布）。缓存 TTL = 记录 TTL（上限 1h）。
+- 握手：uTLS spec 路径 + Config.EncryptedClientHelloConfigList。outer 用
+  Chrome/iOS 指纹 spec（Firefox spec 在 ECH inner/outer 扩展压缩下会触发
+  服务端 decode_error，暂不用于 ECH）；outer SNI 手动替换为公共名（库不代劳），
+  spec 已含 GREASE ECH 扩展时不再追加（双 ECH 扩展 = 畸形 outer）。
+- 降级：ECH 握手失败（配置轮换 / 中间盒 RST ECH）→ 该域名停用 5 分钟 +
+  后台刷新配置重试，期间回退明文 SNI——可用性优先。
+- CC 侧：StartRelayListeners 启动时同样武装 ECH（经 /dns 拿配置）。
+- 验证：TestECHHandshakeToRelay（ECHAccepted=true + outer 裸字节含
+  cloudflare-ech.com 且不含真实域名）；真机 agent ECH armed → checkin →
+  命令往返全通；CC 双隧道重建。
+
+已知残留可见面：GFW 若直接 RST 含 ECH 扩展的 ClientHello，连接会走明文
+SNI 降级路径（行为等价于未开启 ECH）。

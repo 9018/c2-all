@@ -182,6 +182,10 @@ func rotateDoH(failedURL, nextURL string) {
 		net.DefaultResolver = resolver
 		common.RuntimeConfig.DoHServer = newDoH
 		logging.Warningf("DoH re-homed to failover endpoint: %s", hostOf(nextURL))
+		// re-arm ECH for the new relay host so the SNI stays masked after
+		// a failover / hot migration
+		transport.SetDoHEndpoint(newDoH)
+		go transport.RefreshECHConfig(newDoH, hostOf(nextURL))
 	}
 }
 
@@ -237,6 +241,12 @@ func NewPinnedDoHResolver(uri string) (*net.Resolver, error) {
 		}
 	}
 	return dns.NewDoHResolver(uri, dns.DoHCache())
+}
+
+// HostOfURL extracts the host part of a URL (exported for the agent
+// bootstrap: ECH config fetch target).
+func HostOfURL(rawURL string) string {
+	return hostOf(rawURL)
 }
 
 func hostOf(rawURL string) string {
