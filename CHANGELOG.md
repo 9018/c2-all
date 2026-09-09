@@ -1311,3 +1311,26 @@ relay-only 架构下 agent 直连 CC 的 HTTP preflight 是唯一暴露 CC 真�
 **升级注意**：存量 agent 若内嵌 preflight_enabled=true 的旧配置，升级 CC 到
 本版本后其 preflight 请求将永远 404 → agent 循环退避无法 checkin。需在旧 CC
 上重新生成 agent 替换，或接受一次性失联重新部署。
+
+## 2026-09-10 CF relay 热迁移（多账号 fleet + 自动 failover）
+
+面板新增 "Relay 管理" 页：预设多个 CF 账号（api_token/account_id/domain/zone_id），
+实时显示每账号 DO 配额燃烧度；活跃账号 DO 用量超过阈值（默认 90%）时自动迁移到
+下一个备用账号，或手动点"迁移到此账号"。
+
+迁移流程（全 API，无 wrangler 依赖）：
+部署备用账号 Worker（workers.dev 子域注册 → Scripts API module 上传 →
+自定义域名 DNS+route）→ DNS 预热 + 健康检查 → 旧 Worker 设 MIGRATE_URL
+（对存量连接 close(4002,新URL)、新连接 409）→ CC 切换 relay listener →
+agent 收到 4002/409 自动跟随新端点。genagent 同时把全部备用账号域名
+内嵌进 agent，整舰队迁移靠既有端点轮换即可存活。
+
+配套修复：dialRelay 强制 IPv4（本机无 IPv6 路由时 ENETUNREACH）、
+relay listener 首次拨号失败改为永久退避重试（新域名 DNS 传播竞争）、
+迁移前 DNS 预热等待。
+
+面板登录（前端 Login + 后端 authMiddleware/web_token）已整体移除，
+面板现为无鉴权开放（内网使用）。
+
+实测：两次跨账号迁移（f8b31eff→de125516→6f821d90），agent 全自动
+follow、checkin、命令往返全通。
