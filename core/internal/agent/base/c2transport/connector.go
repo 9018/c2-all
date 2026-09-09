@@ -214,7 +214,17 @@ var cfEdgeBootstrapIPs = []string{
 // to the stock resolver (plaintext system-DNS bootstrap) when no pinned
 // edge answers — e.g. if CF retires those addresses.
 func NewPinnedDoHResolver(uri string) (*net.Resolver, error) {
-	pinned, err := dns.NewDoHResolver(uri, dns.DoHCache(), dns.DoHAddresses(cfEdgeBootstrapIPs...))
+	// The DoH HTTPS connection itself must share the WS channel's browser
+	// TLS fingerprint — a Go-default ClientHello from the same host would
+	// betray the mimicry (and is a classic Golang-malware tell on its own).
+	tr := &http.Transport{
+		ForceAttemptHTTP2: false, // uTLS negotiates http/1.1 (WS-like ALPN)
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return transport.BrowserLikeTLSDial(ctx, addr, cfEdgeBootstrapIPs)
+		},
+	}
+	pinned, err := dns.NewDoHResolver(uri, dns.DoHCache(),
+		dns.DoHAddresses(cfEdgeBootstrapIPs...), dns.DoHTransport(tr))
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()

@@ -114,31 +114,76 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("relay TLS dial: bad addr %q: %w", addr, err)
+	return browserHandshake(conn, addr)
+}
+
+// browserHandshake wraps an established TCP connection in uTLS with a
+// randomized browser ClientHello (ALPN pinned to http/1.1). host may be a
+// host:port pair or a bare hostname; only the hostname is used for SNI and
+// certificate validation (system root pool — the endpoint is a CF domain).
+func browserHandshake(conn net.Conn, hostport string) (*utls.UConn, error) {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
 	}
-	// CF public cert chain is verified by the system pool (InsecureSkipVerify
-	// stays false; a pinned CA is unnecessary — the endpoint is a CF domain).
 	cfg := &utls.Config{ServerName: host, RootCAs: relayTLSRootCAs}
 	var uconn *utls.UConn
 	specs, specErr := browserHelloSpecs()
 	if specErr == nil && len(specs) > 0 {
 		spec := specs[util.RandInt(0, len(specs))]
 		uconn = utls.UClient(conn, cfg, utls.HelloCustom)
-		if err = uconn.ApplyPreset(spec); err != nil {
+		if err := uconn.ApplyPreset(spec); err != nil {
 			uconn = utls.UClient(conn, cfg, utls.HelloRandomizedNoALPN)
 		}
 	} else {
 		uconn = utls.UClient(conn, cfg, utls.HelloRandomizedNoALPN)
 	}
 	uconn.SetDeadline(time.Now().Add(10 * time.Second)) // handshake must never hang
-	if err = uconn.Handshake(); err != nil {
+	if err := uconn.Handshake(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("relay TLS handshake %s: %w", host, err)
 	}
 	return uconn, nil
+}
+
+// BrowserLikeTLSDial dials host:port and performs the same randomized
+// browser-fingerprint uTLS handshake the relay WS channel uses. Agent-side
+// HTTPS clients (the DoH transport, /extip) must use this: the default Go
+// http.Client ClientHello is a well-known non-browser — and classic
+// Golang-malware — fingerprint, and would betray the WS channel's
+// browser mimicry when both run on the same host.
+//
+// When pinnedIPs is non-empty (["ip:443", ...]) the TCP connection goes
+// to those addresses directly while TLS SNI/cert validation still use the
+// hostname from addr; resolving addr is skipped entirely (no plaintext
+// bootstrap lookup). Pins are tried in order. Otherwise addr is resolved
+// via net.DefaultResolver — the agent's DoH when installed.
+func BrowserLikeTLSDial(ctx context.Context, addr string, pinnedIPs []string) (net.Conn, error) {
+	if len(pinnedIPs) > 0 {
+		var lastErr error
+		for _, pin := range pinnedIPs {
+			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", pin)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			uc, err := browserHandshake(conn, addr)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return uc, nil
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("browser-like dial: no pinned IP for %s", addr)
+	}
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
+	if err != nil {
+		return nil, err
+	}
+	return browserHandshake(conn, addr)
 }
 
 var relayDialer = &websocket.Dialer{

@@ -82,6 +82,25 @@ export default {
       return handleDoH(request, env, ctx);
     }
 
+    // ---------- external IP echo (agent self-report) ----------
+    // The CC only ever sees the relay (CF edge) address, so agents
+    // self-report their egress IP. Asking a third-party "echo your IP"
+    // service (ipify & co) is a classic malware-recon indicator and would
+    // carry a Go TLS fingerprint — asking our own Worker instead rides
+    // the same domain and the same browser-fingerprinted TLS as the WS
+    // channel. CF-Connecting-IP is the client's real address.
+    if (path === '/extip') {
+      const provided =
+        (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '') ||
+        url.searchParams.get('secret') ||
+        '';
+      if (!secretOK(provided)) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      const ip = request.headers.get('CF-Connecting-IP') || '';
+      return new Response(ip, { headers: { 'content-type': 'text/plain' } });
+    }
+
     // ---------- WebSocket relay ----------
     if (path.startsWith('/ws/')) {
       return handleWebSocket(request, env, ctx);

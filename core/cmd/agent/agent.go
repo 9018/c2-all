@@ -39,8 +39,12 @@ var c2Backoff = c2BackoffInitial
 
 // takeC2Backoff sleeps for the current backoff and then doubles it.
 func takeC2Backoff() {
-	logging.Warningf("Backing off for %v before reconnect", c2Backoff)
-	time.Sleep(c2Backoff)
+	// ±50% jitter: a deterministic 5s→10m doubling rhythm is machine-like,
+	// and it synchronizes a whole fleet behind one NAT into a visible
+	// thundering herd. Real clients retry with messy, human-ish variance.
+	sleepFor := c2Backoff/2 + time.Duration(util.RandInt(0, int(c2Backoff)))
+	logging.Warningf("Backing off for %v before reconnect", sleepFor)
+	time.Sleep(sleepFor)
 	c2Backoff *= 2
 	if c2Backoff > c2BackoffMax {
 		c2Backoff = c2BackoffMax
