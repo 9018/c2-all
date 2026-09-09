@@ -10,6 +10,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -22,17 +23,32 @@ import (
 func StartRelayListeners(ctx context.Context, relayURLs []string) {
 	for _, u := range relayURLs {
 		go func(url string) {
-			l, err := transport.NewRelayListener(url)
-			if err != nil {
-				logging.Errorf("relay listener %s: %v", url, err)
+			// redial forever with backoff: the first dial can race DNS
+			// propagation for a freshly migrated domain
+			backoff := 2 * time.Second
+			for {
+				l, err := transport.NewRelayListener(url)
+				if err != nil {
+					logging.Errorf("relay listener %s: %v (retrying in %s)", maskSecret(url), err, backoff)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					if backoff < 60*time.Second {
+						backoff *= 2
+					}
+					continue
+				}
+				backoff = 2 * time.Second
+				logging.Successf("🔗 Relay tunnel established: %s", maskSecret(url))
+				go func() {
+					<-ctx.Done()
+					_ = l.Close()
+				}()
+				serveRelayListener(l)
 				return
 			}
-			logging.Successf("🔗 Relay tunnel established: %s", maskSecret(url))
-			go func() {
-				<-ctx.Done()
-				_ = l.Close()
-			}()
-			serveRelayListener(l)
 		}(u)
 	}
 }

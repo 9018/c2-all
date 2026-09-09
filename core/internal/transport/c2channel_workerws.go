@@ -107,7 +107,10 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	// Independent dialer: the agent may replace net.DefaultResolver with a
 	// DoH resolver whose upstream is unreachable in relay-only networks;
 	// relay endpoints must resolve via plain system DNS.
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+	// Force IPv4: CF edges are IPv4-reachable everywhere, while hosts with a
+	// configured-but-unrouted IPv6 stack would otherwise fail the dial with
+	// ENETUNREACH before falling back.
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
