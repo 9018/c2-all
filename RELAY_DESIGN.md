@@ -1,13 +1,26 @@
 
 ---
 
+# 当前状态速查（2026-09-10）
+
+| 项 | 当前值 |
+|---|---|
+| 生产 relay | `relay.ubx1ujnzri.kdns.fr`（新 CF 账号，同域双 room: prod-room-a/b） |
+| Worker | `emp3r0r-cf-relay`（Hibernation API 版，tag 环绕 254） |
+| agent 心跳 | relay 模式 hello 退避 120-240s；WS 协议 ping 30s（edge 免费应答） |
+| preflight | **已移除**（2026-09-10）——agent 与 CC 间无任何直连流量 |
+| 配额实测 | 1.20 DO req/min/agent ≈ 52k/月（免费额度撑 ~2 agent 7×24；$5 撑 ~38） |
+| 生成命令 | `genagent --relay=same`（不带 `--relay` = 生成 http_poll 直连模式 agent） |
+
+> 以下为按日期排列的实现日志（历史记录，当时的事实，域名/数据以当时为准）。
+
 # 实现状态 (2026-09-06)
 
 设计已落地，代码在两处：
 
 ## 1. Worker 侧 — `/home/a9017/c2/emp3r0r-cf-relay/`
 - `src/worker.js`：路由 `/health`、`/dns`（RFC 8484 DoH 多上游容错）、`/ws/<room>?role=<cc|agent>&secret=`
-- `src/relay_do.js`：Durable Object 每房间一实例；accept 模式（非 hibernation，`new_classes` 迁移）；tag a1..a254 动态分配；CC 顶替旧连接；`0xFF` 广播
+- `src/relay_do.js`：Durable Object 每房间一实例；~~accept 模式~~（2026-09-08 已改 Hibernation，见下文）；tag 动态分配（2026-09-09 起环绕 254 并跳过在线占用，见下文）；CC 顶替旧连接；`0xFF` 广播
 - 鉴权：`EMP_SHARED_SECRET`（Bearer 或 `?secret=`，常数时间比较），未设置=dev 开放
 - **测试**：Python 9 步协议测试全过（`/tmp/test_relay_ws.py`）；miniflare 偶发握手超时 (~20%) 是本地怪癖，生产不受影响
 
@@ -286,3 +299,16 @@ storage，跨休眠累积突破 255 后引爆。
 注：hello 双向各计 1 次唤醒（agent→DO、CC→DO），实测比理论 0.67/min 略高
 （CC 侧附带消息）。再拉长间隔可到 4-8min（CC 10min 超时内）换更省，但在线
 显示粒度变粗——2-4min 是当前平衡点。3+ 个长驻 agent 建议直接 $5/月。
+
+## preflight（条件 C2 直连）移除（2026-09-10）
+
+relay-only 架构下 preflight 是唯一暴露 CC 真实位置的流量，且"判断 CC 是否在线"
+的职责已被常在的 CF relay 取代。整体移除：lib/preflight 包、CC 端
+preflight_feature.go（HTTP/H2 注册）、agent connect 循环的 CheckC2Condition、
+config 五字段、builder 默认启用逻辑。
+
+验证：relay agent 全链路零 preflight 日志、checkin/命令/在线全走 CF
+（`ss` 确认无任何 7000/8888 直连）；http_poll 直连模式（本机测试）不受影响。
+
+**存量 agent 注意**：内嵌 preflight_enabled=true 的旧 agent 升级 CC 后其
+preflight 请求 404 → 无限退避。需重建 agent 替换。

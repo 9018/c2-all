@@ -139,7 +139,7 @@ func tun2socksStartCmdRun(cmd *cobra.Command, _ []string) {
 		}
 	}
 
-	// Preflight: the pivot must be reachable before we reroute traffic.
+	// Reachability gate: the pivot must be reachable before we reroute traffic.
 	conn, err := net.DialTimeout("tcp", socksAddr, 3*time.Second)
 	if err != nil {
 		logging.Errorf("SOCKS5 pivot at %s is not reachable (run `socks_start` first): %v", socksAddr, err)

@@ -170,31 +170,3 @@ func TestCreateEmp3r0rHTTPClient(t *testing.T) {
 		}
 	})
 }
-
-func TestCreatePreflightHTTPClient(t *testing.T) {
-	// Generate certs
-	caPEM, serverCert := generateCerts(t)
-
-	// Set global CACrtPEM so CreatePreflightHTTPClient picks it up
-	originalCACrtPEM := CACrtPEM
-	CACrtPEM = caPEM
-	defer func() { CACrtPEM = originalCACrtPEM }()
-
-	// Start Mock HTTPS Server
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("preflight ok"))
-	}))
-	server.TLS = &tls.Config{
-		Certificates: []tls.Certificate{serverCert},
-		NextProtos:   []string{"h2"},
-		CurvePreferences: []tls.CurveID{
-			tls.CurveP256,
-			tls.X25519,
-		},
-		MinVersion: tls.VersionTLS12,
-	}
-	server.StartTLS()
-	defer server.Close()
-
-}
