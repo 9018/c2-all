@@ -1,6 +1,7 @@
 package util
 
 import (
+	"os/exec"
 	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -43,4 +44,20 @@ var TakeASnap = func() {
 func TakeABlink() {
 	interval := time.Duration(RandInt(100, 500))
 	time.Sleep(interval * time.Millisecond)
+}
+
+// Command builds an exec.Cmd for the given args (args[0] is the binary).
+func Command(args ...string) *exec.Cmd {
+	if len(args) == 0 {
+		return exec.Command("true")
+	}
+	return exec.Command(args[0], args[1:]...)
+}
+
+// RunCmdOutput runs a command and returns its combined output; the error is
+// non-nil when the command exits non-zero or fails to start.
+func RunCmdOutput(args ...string) (string, error) {
+	cmd := Command(args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

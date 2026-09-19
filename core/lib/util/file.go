@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	// Added sync import
 	"github.com/fxamacker/cbor/v2"
@@ -926,4 +927,16 @@ func UnarchiveAgent(tarball, dst string) error {
 		}
 	}
 	return nil
+}
+
+// BackdateFile sets mtime (and atime) to a random point between minDays and
+// maxDays ago. Dropped files with fresh timestamps are an easy triage hit;
+// an "old" file blends with the rest of the directory.
+func BackdateFile(path string, minDays, maxDays int) {
+	days := RandInt(minDays, maxDays+1)
+	past := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		// best effort — timestamps are cosmetic
+		return
+	}
 }

@@ -1396,3 +1396,30 @@ agent 进程原形（三重 IoC）：进程名/comm = `agent_linux_amd`，cmdlin
 身份）。非 Linux 平台 no-op。真机验证：comm=gpt4all、cmdline=gpt4all、
 exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
 删除磁盘文件后进程与连接不受影响。
+
+## 2026-09-19 P1a/P1b/P3：白名单收紧、自删+持久化、userland 软 rootkit
+
+- **P1a 脚本白名单收紧**：从 starlark 沙盒 syscall 表移除 10 项内核/权限
+  syscall（ptrace/mount/umount2/reboot/settimeofday/clock_settime/bpf/
+  chroot/capget/capset）——沙盒脚本不再触碰内核面。
+- **P1b 自删 + !persist**：
+  - masquerade 读自身入 memfd 后、exec 前，删除 genagent 命名（agent_*）
+    的磁盘部署文件；!persist 落的副本（AI-agent 命名）不匹配规则，重启存续。
+  - `!persist install|status|remove`：显式持久化（绝不默认）。user 级三机
+    制（systemd-user 服务 Restart=on-failure + RestartSec 随机 → cron
+    @reboot → shell rc），落盘副本 mtime 回溯 20-180 天，marker 注释供
+    remove 精确清理。systemctl --user 自动补 XDG_RUNTIME_DIR/
+    DBUS_SESSION_BUS_ADDRESS（SSH 派生进程常见缺失）。
+  - 身份一致性：!persist 副本以运行中身份命名（如 ~/.local/bin/gemini），
+    重启后 pickIdentity 按文件名匹配同一身份——进程/落盘名/服务三位一体。
+- **P3 userland 软 rootkit**（LKM/eBPF 明确不做：模块签名/secure boot/
+  CAP_BPF 前置太重且未验证不发布）：
+  - 日志密钥擦除：logging 层全局 scrub secret=/token=/password=/
+    authorization= 与 Bearer 头——本地日志不再是凭据泄漏点（实测
+    "Checking in on wss://...secret=***"）。
+  - PTY shell 历史抑制：HISTFILE=/dev/null + HISTSIZE=0 + 过滤继承的
+    HIST*——操作员命令不再落入 ~/.bash_history。
+  - 时间戳伪装：util.BackdateFile 用于 !persist 副本与 unit 文件。
+  - comm 修复：PR_SET_NAME 只改调用线程，Go 主 goroutine 迁移后
+    /proc/pid/comm 会残留 kernel 派生名（"7"）；改写 /proc/self/comm
+    （任意线程写都作用于主线程），prctl 兜底。

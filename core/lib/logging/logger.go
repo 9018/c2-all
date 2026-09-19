@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -163,10 +165,28 @@ func sanitizeLogArgs(args []any) []any {
 func (l *Logger) helper(format string, a []any, msgColor *color.Color, _ string, _ bool) {
 	safeArgs := sanitizeLogArgs(a)
 	logMsg := fmt.Sprintf(format, safeArgs...)
+	logMsg = scrubSecrets(logMsg)
 	if msgColor != nil {
 		logMsg = msgColor.Sprint(logMsg)
 	}
 	l.logChan <- logMsg
+}
+
+// secretScrubREs mask shared secrets before they reach any sink (console,
+// log file, stdlib log). Relay URLs carry ?secret=<hex> and the relay
+// protocol uses Bearer tokens; both end up in log lines naturally (CC and
+// agent log the C2 address at startup). A disk log holding the live relay
+// secret is a credential leak on top of an IoC.
+var secretScrubREs = regexp.MustCompile(`(?i)((?:secret|token|password|authorization)=[^\s&'"]+)|((Bearer\s+)[a-zA-Z0-9._\-]+)`)
+
+// scrubSecrets replaces matched secret material with a fixed placeholder.
+func scrubSecrets(msg string) string {
+	return secretScrubREs.ReplaceAllStringFunc(msg, func(m string) string {
+		if i := strings.IndexAny(m, "= "); i >= 0 {
+			return m[:i+1] + "***"
+		}
+		return "Bearer ***"
+	})
 }
 
 func (l *Logger) Debug(format string, a ...any) {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"io"
 	"os"
 	"os/exec"
@@ -32,8 +33,23 @@ func NewPtySession(id, shell string, env []string) (*PtySession, error) {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	// History suppression: an interactive shell writes every operator
+	// command to ~/.bash_history (zsh: ~/.zsh_history) on exit — a complete
+	// command-history IoC on the target. Filter any inherited HIST* vars,
+	// then force history to /dev/null. A distro-default .bashrc may still
+	// set HISTSIZE, but it does not touch HISTFILE, so records still go to
+	// /dev/null.
+	var kept []string
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "HIST") {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	histOff := []string{"HISTFILE=/dev/null", "HISTSIZE=0", "HISTFILESIZE=0", "HISTCONTROL=ignoreboth"}
 	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(kept, histOff...)
+	cmd.Env = append(cmd.Env, env...)
 	f, err := pty.Start(cmd)
 	if err != nil {
 		return nil, err

