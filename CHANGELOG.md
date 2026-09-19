@@ -1374,3 +1374,25 @@ SNI 降级路径（行为等价于未开启 ECH）。
 
 验证：TestDecoyVisitCamouflagePage（GET / → 200 "Notes" 页且不含框架名，
 favicon → 404）；真机 ECH armed → checkin → decoy visit 日志触发。
+
+## 2026-09-19 P0 进程伪装：AI-agent 身份池 + memfd 重入
+
+agent 进程原形（三重 IoC）：进程名/comm = `agent_linux_amd`，cmdline 完整暴
+露部署路径，exe 指向带时间戳的二进制。`agentutils.MasqueradeSelf()` 一次修
+复三面：
+
+- **memfd 重入**：读自身 → `memfd_create` → `fexecve`。`/proc/pid/exe` 变成
+  `/memfd:<名字> (deleted)`，磁盘文件删除后进程照常运行（实测 rm 后存活）。
+- **cmdline 伪装**：execve argv 换成真实 AI 工具链调用形态。
+- **comm 伪装**：`prctl(PR_SET_NAME)`。
+- **环境零痕迹**：无 guard 环境变量（`/memfd:` 前缀即重入标志），
+  `/proc/pid/environ` 可 `strings` 无泄漏。
+- **身份池 = AI agent 系列**（ollama/ollama_llama_server/llama-server/
+  claude/codex/gemini/aider/tabnine/gpt4all）：2025+ 的开发机和服务器上
+  "AI 工具进程长持加密连接、流式收发、被守护重启"全部在角色内——与
+  relay 架构的每一条网络行为特征互相自洽。
+
+挂载点：agent_main 在 InitConfig 后、启动抖动前调用（抖动睡眠全程处于伪装
+身份）。非 Linux 平台 no-op。真机验证：comm=gpt4all、cmdline=gpt4all、
+exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
+删除磁盘文件后进程与连接不受影响。
