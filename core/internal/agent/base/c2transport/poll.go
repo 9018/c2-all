@@ -360,8 +360,11 @@ func relayHelloBackoff(ctx context.Context) bool {
 	}
 	interval := time.Duration(util.RandInt(120, 240)) * time.Second
 	if time.Since(time.Unix(0, atomic.LoadInt64(&lastAgentActiveNano))) > 10*time.Minute {
-		// idle: 420-510s keeps ~1-1.5min margin against the CC's 10min timeout
-		interval = time.Duration(util.RandInt(420, 511)) * time.Second
+		// idle: 390-470s. A cycle can overshoot by the hello-ACK wait, and a
+		// gap past the CC's 10min tunnel timeout gets the tunnel torn down
+		// (reconnect + re-key + sysinfo costs MORE than the hellos saved —
+		// observed live with a 420-510s window), so keep ~2min of margin.
+		interval = time.Duration(util.RandInt(390, 471)) * time.Second
 	}
 	select {
 	case <-ctx.Done():

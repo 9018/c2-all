@@ -1461,3 +1461,22 @@ exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
   workers.dev）+ 60s 健康检查。操作员为备用账号注册域名 + 面板粘贴
   domain/zone_id + 点部署 → 重新 genagent 后 agent 内嵌可达的备用端点
   （workers.dev 在部分网络不可达的问题就此解决）。
+
+## 2026-09-20 T1 后续修复：extip 缓存、UUIDSig 密码学验证、cadence 收紧
+
+上线观察发现三个问题并修复：
+
+- **GetExternalIP 阻塞 checkin（16 分钟）**：GetExternalIP 内联跑在
+  GatherSystemDetails，relay 故障时 3 次探测×超时预算=16min gather →
+  级联隧道拆除。改为后台刷新（StartExternalIPRefresher，15-30min 周期，
+  8s 探测预算）+ 缓存读取，checkin 永不等待。
+- **UUIDSig 字符串比对误杀同 UUID 重构建**：ECDSA 签名每次随机 → 重
+  genagent 的新签名串必不匹配 DB pin → "identity token mismatch"。改为
+  CA 密码学验证（VerifySignatureWithCA）：验证通过=同一持有者的新构建
+  → 接受；验证失败才拒绝。实测：重构建 agent 以新签名通过验证，密钥缓
+  存恢复，同一身份无缝重连。
+- **空转 cadence 首版 420-510s 出现 777s 间隔**（hello-ACK 超调）→ 隧道
+  被拆 → 重连反而费配额。收紧到 390-470s（~2min 余量），实测 423s/440s
+  稳定无拆除。另修正 MarkAgentActive 只在真命令时打点——CC 每次 hello
+  都推 PeerList，此前会永久遮蔽空转状态。
+- genagent 挪到持久路径 ~/c2/bin/genagent（/tmp 清理反复吃掉它）。

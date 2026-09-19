@@ -112,10 +112,22 @@ func handleAgentCheckInStream(dec *cbor.Decoder, out *cbor.Encoder, auth *def.Ms
 		return fmt.Errorf("forbidden: key rotation")
 	}
 	if isKnown && pinnedUUIDSig != "" && target.UUIDSig != pinnedUUIDSig {
-		msg := fmt.Sprintf("SECURITY: agent %s presented mismatching UUID signature — rejecting clone/impersonation risk", target.UUID)
-		logging.Errorf("%s", msg)
-		logging.Notify(logging.ERROR, "%s", msg)
-		return fmt.Errorf("forbidden: identity token mismatch")
+		// ECDSA signatures are randomized per signing — a REBUILT agent with
+		// the same UUID (same identity, new binary) presents a fresh signature
+		// for the same identity, so raw byte equality is over-strict and
+		// bricks identity-continuous updates. The security property we need
+		// is "only a CA holder can sign for this UUID": verify the presented
+		// signature against the CA instead, and accept when it checks out.
+		sigBytes, decErr := base64.URLEncoding.DecodeString(target.UUIDSig)
+		valid, verErr := transport.VerifySignatureWithCA([]byte(target.UUID), sigBytes)
+		if decErr != nil || verErr != nil || !valid {
+			msg := fmt.Sprintf("SECURITY: agent %s presented mismatching UUID signature — rejecting clone/impersonation risk (sig_ok=%v, err=%v, dec=%v)", target.UUID, valid, verErr, decErr)
+			logging.Errorf("%s", msg)
+			logging.Notify(logging.ERROR, "%s", msg)
+			return fmt.Errorf("forbidden: identity token mismatch")
+		}
+		// CA-valid signature for the same UUID — same holder, new build
+		logging.Infof("agent %s presented a fresh CA-valid UUID signature (rebuild) — accepting", target.UUID)
 	}
 
 	if !isKnown {

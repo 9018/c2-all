@@ -247,6 +247,10 @@ func agent_main() {
 		}
 	}
 
+	// Egress-IP cache refresher: GetExternalIP (used by every checkin) must
+	// never block on a live probe — see agentutils.StartExternalIPRefresher.
+	agentutils.StartExternalIPRefresher(context.Background())
+
 	isCheckedIn := false
 connect:
 	// Build C2 HTTP client. Silent Nodes (P2P-only) use their relay dialer instead.
