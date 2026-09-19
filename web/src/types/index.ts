@@ -19,6 +19,7 @@ export interface Emp3r0rAgent {
   Arch: string
   From: string
   ExternalIP?: string // agent's public egress IP, self-detected via public echo services; empty when undetectable
+  ECHStatus?: string // ECH state of the relay channel: armed (SNI masked) / degraded (plain SNI fallback) / off
   IPs: string[]
   ARP: string[]
   User: string

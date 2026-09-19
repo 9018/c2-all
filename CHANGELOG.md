@@ -1423,3 +1423,22 @@ exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
   - comm 修复：PR_SET_NAME 只改调用线程，Go 主 goroutine 迁移后
     /proc/pid/comm 会残留 kernel 派生名（"7"）；改写 /proc/self/comm
     （任意线程写都作用于主线程），prctl 兜底。
+
+## 2026-09-20 T0：ECH 可见性、重启免 forget、DoH 多组池
+
+- **ECH 降级可见性**：transport 层按 host 追踪 armed/degraded/off（含降级
+  原因）。初始 checkin 采集早于首次 TLS 握手、恒为空——ECH 状态改为随
+  keep-alive hello（MsgTunData 字段 11）携带，CC hello 处理器更新 live 对
+  象。面板 agent 卡片绿/黄/灰徽标（armed=绿、降级/关闭=黄+原因、旧版=灰）。
+- **agent 密钥持久化（重启免 forget）**：ECDSA 身份密钥 AES-GCM 加密落盘
+  （KEK=HKDF(嵌入配置密码+UUID)，~/.cache/mesa_shader_cache_db，0600 +
+  mtime 回溯 20-180 天）。GetAgentKey 顺序：in-process → stager FD3 →
+  加密缓存 → 随机生成。RenewAgentKey 同步覆写缓存。stager 路径不变，
+  EMP_NO_KEY_PERSIST=1 可禁用。实测：同二进制重启 → "restored from local
+  cache" → CC pin 验证通过，无需 forget（旧二进制对照组照旧 CRITICAL）。
+- **DoH bootstrap 多组池**：cfEdgeBootstrapIPs 单组 → 两组 anycast 池
+  （组 2 = relay zone 实测边缘 IP），BootstrapPinnedDoH 按组自测轮换。
+- **relay 拨号零明文解析**：dialRelayTLS 原走系统 DNS（明文查询 relay 域
+  名）→ 改为 learned edge（内存记忆成功边缘）→ DoH 解析（DefaultResolver
+  = pinned DoH）→ 系统 DNS 兜底。unshare 黑洞 resolv.conf 实测：DoH 引导
+  + ECH 获取 + WS 拨号 + checkin 往返全通，零系统 DNS。

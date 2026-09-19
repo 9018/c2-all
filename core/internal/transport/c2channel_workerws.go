@@ -103,14 +103,73 @@ func browserHelloSpecs() ([]*utls.ClientHelloSpec, error) {
 // fails for any reason we fall back to HelloRandomizedNoALPN (fresh random
 // JA3 per connection, no ALPN => HTTP/1.1) — still far from Go's static
 // fingerprint.
+// relayEdgeCache remembers relay edge IPs that actually accepted a
+// connection, per hostname — future dials try them first, saving the DoH
+// query entirely. In-memory only (one agent process = one edge anyway).
+var (
+	relayEdgeMu      sync.Mutex
+	relayLearnedEdge = map[string]string{} // host -> ip:port that worked
+)
+
+func rememberRelayEdge(host, ipPort string) {
+	relayEdgeMu.Lock()
+	relayLearnedEdge[host] = ipPort
+	relayEdgeMu.Unlock()
+}
+
+func learnedRelayEdge(host string) string {
+	relayEdgeMu.Lock()
+	defer relayEdgeMu.Unlock()
+	return relayLearnedEdge[host]
+}
+
+// relayDialCandidates returns the ordered dial targets for a relay host:
+// the learned edge first, then IPs resolved via net.DefaultResolver (the
+// agent's pinned DoH — zero plaintext DNS) shuffled for distribution, and
+// an empty slice when resolution fails (caller falls back to the OS
+// resolver).
+func relayDialCandidates(ctx context.Context, host, port string) []string {
+	var cands []string
+	if pin := learnedRelayEdge(host); pin != "" {
+		cands = append(cands, pin)
+	}
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return cands
+	}
+	// deterministic-enough shuffle: rotate by a random offset
+	off := util.RandInt(0, len(ips))
+	for i := range ips {
+		ip := ips[(i+off)%len(ips)]
+		cand := net.JoinHostPort(ip, port)
+		if cand != learnedRelayEdge(host) {
+			cands = append(cands, cand)
+		}
+	}
+	return cands
+}
+
+// dialRelayTLS connects to the relay with browser-fingerprint TLS.
+//
+// Resolution order (closing the last plaintext-DNS leak):
+//  1. learned edge IPs from previous successful dials (no lookup at all)
+//  2. DoH resolution — net.DefaultResolver is the agent's pinned DoH once
+//     installed, so the relay hostname never hits the system resolver
+//  3. direct addr dial (OS resolver) — availability fallback when DoH is
+//     broken or not configured
 func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
-	// Independent dialer: the agent may replace net.DefaultResolver with a
-	// DoH resolver whose upstream is unreachable in relay-only networks;
-	// relay endpoints must resolve via plain system DNS.
-	// Force IPv4: CF edges are IPv4-reachable everywhere, while hosts with a
-	// configured-but-unrouted IPv6 stack would otherwise fail the dial with
-	// ENETUNREACH before falling back.
+	host, port, splitErr := net.SplitHostPort(addr)
 	dial := func() (net.Conn, error) {
+		if splitErr == nil && host != "" {
+			for _, cand := range relayDialCandidates(ctx, host, port) {
+				conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", cand)
+				if err == nil {
+					rememberRelayEdge(host, cand)
+					return conn, nil
+				}
+			}
+		}
+		// fallback: OS resolution (same behavior as before DoH pinning)
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	}
 	return browserTLSConnect(dial, addr)
@@ -192,9 +251,11 @@ func browserTLSConnect(dial func() (net.Conn, error), hostport string) (*utls.UC
 		if err == nil {
 			uconn, echErr := browserHandshakeECH(conn, hostport, e)
 			if echErr == nil {
+				setECHStatus(host, "armed", "")
 				return uconn, nil
 			}
 			logging.Infof("ECH handshake with %s failed (%v), falling back to plain SNI", host, echErr)
+			setECHStatus(host, "degraded", echErr.Error())
 			echDisable(host, 5*time.Minute)
 			refreshECHBackground(host)
 		}

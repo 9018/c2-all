@@ -198,17 +198,70 @@ func deriveDoH(endpointURL string) string {
 	return fmt.Sprintf("https://%s/dns?secret=%s", host, secret)
 }
 
-// cfEdgeBootstrapIPs are generic Cloudflare anycast edge addresses that
-// terminate TLS for ANY proxied hostname via SNI routing (a zone's own
-// 104.21.x/172.67.x pair is just a slice of the same anycast network;
-// verified working 2026-09). Pinning them lets a DoH resolver bootstrap
-// WITHOUT resolving the DoH server's own hostname through the plaintext
-// system resolver — the last DNS leak an agent had.
-var cfEdgeBootstrapIPs = []string{
-	"104.16.249.36:443",
-	"172.67.68.100:443",
-	"188.114.96.3:443",
-	"188.114.97.3:443",
+// cfEdgeBootstrapPool holds GROUPS of generic Cloudflare anycast edge
+// addresses that terminate TLS for ANY proxied hostname via SNI routing (a
+// zone's own 104.21.x/172.67.x pair is just a slice of the same anycast
+// network; verified working 2026-09). Pinning them lets a DoH resolver
+// bootstrap WITHOUT resolving the DoH server's own hostname through the
+// plaintext system resolver — the last DNS leak an agent had.
+//
+// Groups are tried in order when the pinned path fails its self-test (e.g.
+// one IP block gets retired or poisoned); a working group is remembered for
+// the process lifetime. Group 2 is the relay zone's live-observed edge pair.
+var cfEdgeBootstrapPool = [][]string{
+	{"104.16.249.36:443", "172.67.68.100:443", "188.114.96.3:443", "188.114.97.3:443"},
+	{"172.67.222.78:443", "104.21.17.48:443", "104.21.62.207:443"},
+}
+
+var cfEdgeGroupIdx int
+
+func currentEdgeGroup() []string {
+	return cfEdgeBootstrapPool[cfEdgeGroupIdx%len(cfEdgeBootstrapPool)]
+}
+
+// rotateEdgeGroup moves to the next anycast group (wraps around) and
+// returns it.
+func rotateEdgeGroup() []string {
+	cfEdgeGroupIdx++
+	return currentEdgeGroup()
+}
+
+// BootstrapPinnedDoH installs a pinned DoH resolver, trying every anycast
+// group until one answers a real query (resolving the DoH host itself —
+// which needs no plaintext lookup since the dial is IP-pinned). Falls back
+// to the last group's resolver even when nothing verified: availability
+// first, the resolver retries dials anyway.
+func BootstrapPinnedDoH(uri string) (*net.Resolver, error) {
+	var lastErr error
+	for i := 0; i < len(cfEdgeBootstrapPool); i++ {
+		group := currentEdgeGroup()
+		pinned, err := transport.NewMimicDoHResolver(uri, group)
+		if err != nil {
+			lastErr = err
+			logging.Warningf("DoH bootstrap group %d failed: %v", i, err)
+			rotateEdgeGroup()
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		// verify the pinned path actually works by resolving the relay host
+		// itself
+		host := hostOf(uri)
+		if host != "" {
+			if _, lerr := pinned.LookupHost(ctx, host); lerr == nil {
+				cancel()
+				return pinned, nil
+			} else {
+				lastErr = lerr
+			}
+		}
+		cancel()
+		logging.Warningf("DoH bootstrap group %d self-test failed: %v, rotating", i, lastErr)
+		rotateEdgeGroup()
+	}
+	// no group verified — still return a pinned resolver (last group): its
+	// dials retry at query time, and the alternative (plaintext bootstrap)
+	// is exactly what we are avoiding
+	return transport.NewMimicDoHResolver(uri, currentEdgeGroup())
 }
 
 // NewPinnedDoHResolver returns a DoH resolver for uri (https://host/dns?...)
@@ -222,7 +275,7 @@ func NewPinnedDoHResolver(uri string) (*net.Resolver, error) {
 	// Authorization header) — the ncruces resolver sends a bare
 	// Go-http-client UA with the secret in the URL query. Our own
 	// resolver controls the whole request.
-	pinned, err := transport.NewMimicDoHResolver(uri, cfEdgeBootstrapIPs)
+	pinned, err := transport.NewMimicDoHResolver(uri, currentEdgeGroup())
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()

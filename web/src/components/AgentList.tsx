@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { 
   Monitor, 
   Shield,
+  ShieldCheck,
   Wifi,
   RefreshCw,
   Trash2,
@@ -106,6 +107,33 @@ function AgentCard({ agent, isActive, onSelect, onConsole, onFiles }: {
           <Wifi className="w-3 h-3 md:w-4 md:h-4 text-gray-500" />
           <span className="truncate" title={agent.ExternalIP || agent.From}>
             {agent.ExternalIP || agent.From}
+          </span>
+        </div>
+        <div
+          className="flex items-center gap-1.5 col-span-2"
+          title={
+            agent.ECHStatus === 'armed'
+              ? 'ECH 已启用：外层 ClientHello SNI 已被 cloudflare-ech.com 掩码'
+              : agent.ECHStatus
+                ? `ECH 未生效：${agent.ECHStatus}（连接已回退明文 SNI）`
+                : 'ECH 状态未知（旧版 agent）'
+          }
+        >
+          <ShieldCheck className={`w-3 h-3 md:w-4 md:h-4 ${agent.ECHStatus === 'armed' ? 'text-green-400' : agent.ECHStatus ? 'text-yellow-400' : 'text-gray-600'}`} />
+          <span
+            className={`truncate ${
+              agent.ECHStatus === 'armed'
+                ? 'text-green-400'
+                : agent.ECHStatus
+                  ? 'text-yellow-400'
+                  : 'text-gray-600'
+            }`}
+          >
+            {agent.ECHStatus === 'armed'
+              ? 'ECH armed'
+              : agent.ECHStatus
+                ? `ECH ${agent.ECHStatus.length > 24 ? agent.ECHStatus.slice(0, 24) + '…' : agent.ECHStatus}`
+                : 'ECH unknown'}
           </span>
         </div>
       </div>

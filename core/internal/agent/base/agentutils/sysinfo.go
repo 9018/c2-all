@@ -73,6 +73,7 @@ func GatherSystemDetails() *def.Emp3r0rAgent {
 	info.Container = "N/A" // sysinfo.CheckContainer() might be light, but skipping for minimal
 	info.Transport = genC2TransportString()
 	def.Transport = info.Transport
+	info.ECHStatus = transport.ECHStatus()
 	info.P2PRelayPort = common.RuntimeConfig.P2PRelayPort
 	info.MeshGossipPort = common.RuntimeConfig.MeshGossipPort
 	info.Files = util.ListMemFiles()
@@ -183,6 +184,7 @@ func CollectFullSystemInfo() *def.Emp3r0rAgent {
 	info.Container = sysinfo.CheckContainer()
 	info.Transport = genC2TransportString()
 	def.Transport = info.Transport
+	info.ECHStatus = transport.ECHStatus()
 	info.P2PRelayPort = common.RuntimeConfig.P2PRelayPort
 	info.MeshGossipPort = common.RuntimeConfig.MeshGossipPort
 	info.Files = util.ListMemFiles()
