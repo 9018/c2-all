@@ -145,6 +145,7 @@ func InitWebServer(port int) {
 	api.HandleFunc("/cf/accounts", handleWebCFAccounts).Methods("GET", "POST")
 	api.HandleFunc("/cf/accounts/{id}", handleWebCFAccountByID).Methods("PUT", "DELETE")
 	api.HandleFunc("/cf/accounts/{id}/activate", handleWebCFActivate).Methods("POST")
+	api.HandleFunc("/cf/accounts/{id}/deploy", handleWebCFDeploy).Methods("POST")
 	api.HandleFunc("/cf/settings", handleWebCFSettings).Methods("PUT")
 	api.HandleFunc("/cf/status", handleWebCFStatus).Methods("GET")
 	

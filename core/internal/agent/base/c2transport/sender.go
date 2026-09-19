@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
+	"time"
 	"unicode"
 
 	"github.com/fxamacker/cbor/v2"
@@ -134,4 +136,16 @@ func NotifyC2Raw(msg *def.MsgTunData) error {
 		msg.AgentUUIDSig = base64.URLEncoding.EncodeToString(sig)
 	}
 	return send2CC(msg)
+}
+
+// lastAgentActiveNano records the last time the agent processed anything
+// from the CC (command, token push, peer list). The keep-alive loop uses it
+// to stretch the hello cadence when the agent is idle (see
+// relayHelloBackoff) — DO wake-ups are billed, and an idle agent that still
+// answers pushes within one WS frame does not need frequent probes.
+var lastAgentActiveNano int64
+
+// MarkAgentActive stamps the current time as "CC said something to us".
+func MarkAgentActive() {
+	atomic.StoreInt64(&lastAgentActiveNano, time.Now().UnixNano())
 }

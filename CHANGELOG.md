@@ -1442,3 +1442,22 @@ exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
   名）→ 改为 learned edge（内存记忆成功边缘）→ DoH 解析（DefaultResolver
   = pinned DoH）→ 系统 DNS 兜底。unshare 黑洞 resolv.conf 实测：DoH 引导
   + ECH 获取 + WS 拨号 + checkin 往返全通，零系统 DNS。
+
+## 2026-09-20 T1：hello 自适应省配额、!update 自更新、备用通道部署
+
+- **#4 hello 自适应**：命令路径本就是 WS push，hello 只是活性探测（每次
+  2 个 DO 请求，计费）。活跃期（10min 内有 CC 下发）保持 2-4min；空转期
+  拉长到 7-8.5min（距 CC 10min 隧道超时留 1.5min 余量）——空转 DO 用量
+  降 ~60%，免费额度容量近乎翻倍。MarkAgentActive 由 HandleC2Command 打点。
+- **#6 !update 自更新**：文件管理器推新构建 → `!update --file <path>`。
+  ELF 魔数 + 体积双重校验；有 !persist 副本则覆写副本（保身份+unit 有效）
+  后 exec 副本，否则直接 exec 上传件（masquerade 会 memfd+自删）。exec
+  失败旧进程存活并报错。genagent 支持 EMP_AGENT_UUID 复用 UUID——同 UUID
+  + 同密码 → 同 KEK → 密钥缓存解密 → TOFU pin 有效 → 更新后同一身份无缝
+  重连（实测 3ae993a8 构建链）。
+- **#7 备用通道部署**：面板 Relay 管理页非活跃账号卡新增"部署 relay（备
+  用通道）"按钮 → POST /cf/accounts/{id}/deploy → deployRelayWorker
+  （自定义域走 ensureCustomDomain：A 记录 + workers route；无域则
+  workers.dev）+ 60s 健康检查。操作员为备用账号注册域名 + 面板粘贴
+  domain/zone_id + 点部署 → 重新 genagent 后 agent 内嵌可达的备用端点
+  （workers.dev 在部分网络不可达的问题就此解决）。

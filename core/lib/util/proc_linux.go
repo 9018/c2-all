@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 )
 
@@ -281,4 +283,14 @@ func GetChildren(pid int) (children []int, err error) {
 		}
 	}
 	return children, err
+}
+
+// ExecSelfReplace replaces the current process image with the given binary
+// and argv (execve). On success it never returns; on failure the error is
+// returned and the original process continues unharmed.
+func ExecSelfReplace(path string, argv []string) error {
+	if len(argv) == 0 {
+		argv = []string{path}
+	}
+	return unix.Exec(path, argv, os.Environ())
 }

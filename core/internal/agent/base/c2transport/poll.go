@@ -2,6 +2,7 @@ package c2transport
 
 import (
 	"context"
+	"sync/atomic"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -337,10 +338,16 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 // app-level liveness probe. Each hello wakes the relay's Durable Object
 // (billed as a DO request on Cloudflare's free plan) twice — probe plus
 // reply — so idle agents must not keep the http_poll cadence (5-60s,
-// designed for pull-based command fetching). We back off to 2-4min,
-// still well under the CC's 10min tunnel handshake timeout, while the
-// WS protocol-level ping (30s, answered by the edge for free) keeps the
-// connection itself alive.
+// designed for pull-based command fetching).
+//
+// Cadence is therefore adaptive:
+//   - recently active (a command within the last 10min): 2-4min, keeping
+//     the operator's loop snappy
+//   - idle: 7-8.5min — still safely under the CC's 10min tunnel handshake
+//     timeout, and cuts idle DO usage by ~60% (free-plan capacity doubles)
+//
+// The WS protocol-level ping (30s, answered by the edge for free) keeps
+// the connection itself alive regardless of this cadence.
 //
 // Returns true when the sleep completed on a relay transport.
 func relayHelloBackoff(ctx context.Context) bool {
@@ -352,6 +359,10 @@ func relayHelloBackoff(ctx context.Context) bool {
 		return false
 	}
 	interval := time.Duration(util.RandInt(120, 240)) * time.Second
+	if time.Since(time.Unix(0, atomic.LoadInt64(&lastAgentActiveNano))) > 10*time.Minute {
+		// idle: 420-510s keeps ~1-1.5min margin against the CC's 10min timeout
+		interval = time.Duration(util.RandInt(420, 511)) * time.Second
+	}
 	select {
 	case <-ctx.Done():
 	case <-time.After(interval):

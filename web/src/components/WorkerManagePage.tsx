@@ -45,6 +45,7 @@ export function WorkerManagePage() {
   const [editing, setEditing] = useState<CFAccount | null>(null)
   const [form, setForm] = useState<AddForm>({ id: '', api_token: '', label: '', domain: '', zone_id: '' })
   const [migrating, setMigrating] = useState('')
+  const [deploying, setDeploying] = useState('')
   const [threshold, setThreshold] = useState(90)
   const [autoMigrate, setAutoMigrate] = useState(true)
 
@@ -116,6 +117,24 @@ export function WorkerManagePage() {
     } catch (e: any) {
       setError(e.message || String(e))
       setMigrating('')
+    }
+  }
+
+  const deploy = async (acct: CFAccount) => {
+    setDeploying(acct.id)
+    setNotice(`正在向 ${acct.label || acct.id.slice(0, 8)} 部署 relay（含 DNS 预热 + 健康检查）…`)
+    try {
+      const r = await api.deployCFAccount(acct.id)
+      if (r.healthy) {
+        setNotice(`部署完成：${r.relay_base}${r.custom ? '（自定义域名）' : '（workers.dev，部分网络不可达）'} —— 重新 genagent 后 agent 将内嵌此端点`)
+      } else {
+        setError(`部署完成但健康检查失败：${r.relay_base}（${r.health_error || '未知'}）`)
+      }
+      setDeploying('')
+      await load()
+    } catch (e: any) {
+      setError(e.message || String(e))
+      setDeploying('')
     }
   }
 
@@ -221,6 +240,15 @@ export function WorkerManagePage() {
               <div className="text-xs text-gray-600">无配额数据（token 未配置或查询失败）</div>
             )}
 
+            {!acct.active && (
+              <button
+                onClick={() => deploy(acct)}
+                disabled={deploying === acct.id}
+                className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 text-sm rounded-lg transition-colors disabled:opacity-50">
+                {deploying === acct.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+                {deploying === acct.id ? '部署中…' : '部署 relay（备用通道）'}
+              </button>
+            )}
             {!acct.active && (
               <button
                 onClick={() => migrate(acct)}

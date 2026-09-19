@@ -71,6 +71,10 @@ class ApiClient {
   async activateCFAccount(id: string): Promise<{ status: string; account: string }> {
     return this.request<{ status: string; account: string }>(`/cf/accounts/${id}/activate`, { method: 'POST' })
   }
+
+  async deployCFAccount(id: string): Promise<{ relay_base: string; healthy: boolean; custom: boolean; health_error?: string }> {
+    return this.request<{ relay_base: string; healthy: boolean; custom: boolean; health_error?: string }>(`/cf/accounts/${id}/deploy`, { method: 'POST' })
+  }
   async updateCFSettings(s: { migrate_threshold?: number; auto_migrate?: boolean; shared_secret?: string }): Promise<CFFleet> {
     return this.request<CFFleet>('/cf/settings', { method: 'PUT', body: JSON.stringify(s) })
   }

