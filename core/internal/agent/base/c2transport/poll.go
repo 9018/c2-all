@@ -316,6 +316,7 @@ func MsgTunneler(conn io.ReadWriteCloser, config *def.Config, callback func(*def
 			break
 		}
 		handshakeDone = true
+		transport.MaybeDecoyVisit(def.CCAddress)
 		if relayHelloBackoff(ctx) {
 			continue
 		}
