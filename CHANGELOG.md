@@ -1569,3 +1569,20 @@ WS 专用连接把 ALPN 限制为 http/1.1（h2-WS 未普及所致）。上一�
   输出 "Copied to:" 行；部署顺序固化为：重编 stub → genagent -o → 换进程。
 - 实测：新客户端 comm/exe/cmdline=gemini 三面一体、environ 仅 6 个标准
   变量、jitter 在掩护名下进行。
+
+## 2026-09-20 健康检查升级为真实功能测试（WS 回环）
+
+此前 checkWorkerHealth 以 GET /health 200 判定"健康"——只证明 Worker 应答，
+不证明任何生产依赖的链路（WS 升级 / DO 房间状态 / agent→CC 管道）。
+
+- **probeRelayFunction**（cf_probe.go）：在隔离探针房间跑完整回环——
+  1) CC 腿加入 → hello{role:cc}；2) agent 腿加入 → hello{cc:true}
+  （证明 DO 房间状态里有 CC）；3) agent 发二进制 → CC 腿收到 [tag][payload]
+  （证明 DO 管道端到端）。控制帧与管道帧交错处理（实测 agent-joined 先到）。
+  每步失败都指出断掉的腿，面板 health_error 从此指向真实缺陷。
+- checkWorkerHealth：/health 降级为预热信号（DNS + 冷启动），最终判定 =
+  功能回环。部署 API、热迁移、自动迁移 watcher 全部自动受益——迁移不会再
+  落到半坏的 Worker。
+- **新端点 POST /cf/accounts/{id}/test + 面板"功能测试（真实 WS 回环）"
+  按钮**：按需对任意已部署账号跑探针（探针自带 CC 腿，standby 无需在线 CC）。
+- 实弹验证：活跃 relay 2408ms 通过、备用 relay 4167ms 通过。

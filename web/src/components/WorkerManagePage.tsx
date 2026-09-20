@@ -46,6 +46,8 @@ export function WorkerManagePage() {
   const [form, setForm] = useState<AddForm>({ id: '', api_token: '', label: '', domain: '', zone_id: '' })
   const [migrating, setMigrating] = useState('')
   const [deploying, setDeploying] = useState('')
+  const [testing, setTesting] = useState('')
+  const [testResult, setTestResult] = useState<{ id: string; ok: boolean; text: string } | null>(null)
   const [threshold, setThreshold] = useState(90)
   const [autoMigrate, setAutoMigrate] = useState(true)
 
@@ -117,6 +119,23 @@ export function WorkerManagePage() {
     } catch (e: any) {
       setError(e.message || String(e))
       setMigrating('')
+    }
+  }
+
+  const test = async (acct: CFAccount) => {
+    setTesting(acct.id)
+    setTestResult(null)
+    try {
+      const r = await api.testCFAccount(acct.id)
+      if (r.ok) {
+        setTestResult({ id: acct.id, ok: true, text: `真实回环通过（WS 升级 + DO 房间 + agent→CC 管道，${r.duration_ms}ms）` })
+      } else {
+        setTestResult({ id: acct.id, ok: false, text: `功能测试失败：${r.error || '未知'}（${r.duration_ms}ms）` })
+      }
+    } catch (e) {
+      setTestResult({ id: acct.id, ok: false, text: `功能测试失败：${e instanceof Error ? e.message : String(e)}` })
+    } finally {
+      setTesting('')
     }
   }
 
@@ -240,6 +259,20 @@ export function WorkerManagePage() {
               <div className="text-xs text-gray-600">无配额数据（token 未配置或查询失败）</div>
             )}
 
+            {acct.domain && (
+              <button
+                onClick={() => test(acct)}
+                disabled={testing === acct.id}
+                className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 text-sm rounded-lg transition-colors disabled:opacity-50">
+                {testing === acct.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                {testing === acct.id ? '测试中…' : '功能测试（真实 WS 回环）'}
+              </button>
+            )}
+            {testResult?.id === acct.id && (
+              <div className={`mt-2 text-xs px-3 py-2 rounded-lg border ${testResult.ok ? 'bg-green-900/20 border-green-700/40 text-green-400' : 'bg-red-900/20 border-red-700/40 text-red-400'}`}>
+                {testResult.text}
+              </div>
+            )}
             {!acct.active && (
               <button
                 onClick={() => deploy(acct)}

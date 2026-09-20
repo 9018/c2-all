@@ -72,6 +72,10 @@ class ApiClient {
     return this.request<{ status: string; account: string }>(`/cf/accounts/${id}/activate`, { method: 'POST' })
   }
 
+  async testCFAccount(id: string): Promise<{ relay_base: string; duration_ms: number; ok: boolean; error?: string }> {
+    return this.request<{ relay_base: string; duration_ms: number; ok: boolean; error?: string }>(`/cf/accounts/${id}/test`, { method: 'POST' })
+  }
+
   async deployCFAccount(id: string): Promise<{ relay_base: string; healthy: boolean; custom: boolean; health_error?: string }> {
     return this.request<{ relay_base: string; healthy: boolean; custom: boolean; health_error?: string }>(`/cf/accounts/${id}/deploy`, { method: 'POST' })
   }

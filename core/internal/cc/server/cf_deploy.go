@@ -403,34 +403,50 @@ func waitDNSReady(host string, timeout time.Duration) error {
 	return fmt.Errorf("%s not resolvable after %s: %v", host, timeout, lastErr)
 }
 
-// checkWorkerHealth polls the /health endpoint of the deployed worker.
-// /health is secret-gated (camouflage otherwise) — the shared secret rides
-// the Authorization header.
+// checkWorkerHealth verifies a deployed relay REALLY works. A /health 200
+// only proves the Worker answered — the machinery production depends on is
+// the WebSocket pipeline: upgrade, Durable Object room state, agent->CC
+// pipe. The verdict is probeRelayFunction's full round-trip; /health is
+// polled first only as a cheap warmup signal (DNS + cold-start).
 func checkWorkerHealth(baseURL, sharedSecret string, timeout time.Duration) error {
 	healthURL := strings.Replace(baseURL, "wss://", "https://", 1) + "/health"
 	deadline := time.Now().Add(timeout)
+	warmed := false
 	var lastErr error
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequest(http.MethodGet, healthURL, nil)
-		if err != nil {
-			return err
-		}
-		if sharedSecret != "" {
-			req.Header.Set("Authorization", "Bearer "+sharedSecret)
-		}
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(req)
-		if err == nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
+		// warmup: wait for the Worker to answer at all (short window)
+		if !warmed {
+			req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+			if err != nil {
+				return err
 			}
-			lastErr = fmt.Errorf("health check HTTP %d", resp.StatusCode)
-		} else {
-			lastErr = err
+			if sharedSecret != "" {
+				req.Header.Set("Authorization", "Bearer "+sharedSecret)
+			}
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(req)
+			if err == nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					warmed = true
+				}
+			}
+		}
+		// the real test: CC+agent legs in an isolated probe room
+		if warmed {
+			if err := probeRelayFunction(baseURL, sharedSecret); err != nil {
+				lastErr = err
+				logging.Warningf("worker functional probe failed for %s: %v", baseURL, err)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			return nil
 		}
 		time.Sleep(3 * time.Second)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("/health never reached 200 within %v", timeout)
 	}
 	logging.Warningf("worker health check failed for %s: %v", baseURL, lastErr)
 	return lastErr
