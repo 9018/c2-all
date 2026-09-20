@@ -292,5 +292,5 @@ func ExecSelfReplace(path string, argv []string) error {
 	if len(argv) == 0 {
 		argv = []string{path}
 	}
-	return unix.Exec(path, argv, os.Environ())
+	return unix.Exec(path, argv, SanitizedEnviron())
 }

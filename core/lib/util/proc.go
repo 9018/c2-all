@@ -1,7 +1,9 @@
 package util
 
 import (
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -60,4 +62,29 @@ func RunCmdOutput(args ...string) (string, error) {
 	cmd := Command(args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// SanitizedEnviron returns an allowlisted copy of the process environment:
+// only innocuous, standard variables survive. The shell that launched us
+// may carry names that point straight at the project (EMP_*), the session
+// it came from (PI_*, SSH_*), or credentials — none of which a real
+// ollama or gpt4all process would have, and all of which any same-user
+// process can read from /proc/pid/environ. Masquerade re-exec and
+// ExecSelfReplace pass this instead of os.Environ().
+func SanitizedEnviron() []string {
+	allowed := map[string]bool{
+		"PATH": true, "HOME": true, "SHELL": true, "TERM": true,
+		"LANG": true, "TZ": true, "USER": true, "LOGNAME": true, "TMPDIR": true,
+		"XDG_RUNTIME_DIR": true, "XDG_DATA_HOME": true, "XDG_CONFIG_HOME": true,
+		"XDG_CACHE_HOME": true, "XDG_SESSION_TYPE": true,
+		"DBUS_SESSION_BUS_ADDRESS": true, "DISPLAY": true,
+		"WAYLAND_DISPLAY": true, "XAUTHORITY": true,
+	}
+	out := make([]string, 0, 12)
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 && allowed[kv[:i]] {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

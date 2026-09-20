@@ -125,10 +125,19 @@ func main() {
 	// so the relay override MUST be applied AFTER MakeConfig, before BuildAgent.
 	relayMode := false
 	relayRoom := ""
-	for _, arg := range os.Args[1:] {
+	// -o <path>: copy the assembled agent to this path after the build.
+	// The build itself always lands in the workspace (timestamped name);
+	// without -o handling operators could silently run stale copies.
+	outCopy := ""
+	for i := 0; i < len(os.Args[1:]); i++ {
+		arg := os.Args[1:][i]
 		if strings.HasPrefix(arg, "--relay=") {
 			relayMode = true
 			relayRoom = strings.TrimPrefix(arg, "--relay=")
+		}
+		if arg == "-o" && i+1 < len(os.Args[1:]) {
+			outCopy = os.Args[1:][i+1]
+			i++
 		}
 	}
 
@@ -206,6 +215,17 @@ func main() {
 	fmt.Printf("   Output: %s\n", result.OutputFile)
 	fmt.Printf("   UUID: %s\n", result.AgentUUID)
 	fmt.Printf("   Config size: %d bytes\n", result.ConfigSize)
+
+	if outCopy != "" {
+		data, err := os.ReadFile(result.OutputFile)
+		if err != nil {
+			fmt.Printf("Warning: read built agent: %v\n", err)
+		} else if err := os.WriteFile(outCopy, data, 0o755); err != nil {
+			fmt.Printf("Warning: -o %s: %v\n", outCopy, err)
+		} else {
+			fmt.Printf("   Copied to: %s\n", outCopy)
+		}
+	}
 }
 
 // maskSecret hides the secret query parameter in logs.

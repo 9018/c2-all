@@ -138,7 +138,7 @@ func MasqueradeSelf() {
 	// but the process mapping still pins the memfd: /proc/pid/exe keeps
 	// pointing at /memfd:<name> (deleted).
 	logging.Warningf("masquerade: re-exec as %q", id.Comm)
-	_ = unix.Exec("/proc/self/fd/"+itoa(fd), id.Argv, os.Environ())
+	_ = unix.Exec("/proc/self/fd/"+itoa(fd), id.Argv, util.SanitizedEnviron())
 
 	// Exec never returns on success
 	logging.Warningf("masquerade: exec failed, falling back to comm-only")

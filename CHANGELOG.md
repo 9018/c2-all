@@ -1549,3 +1549,23 @@ WS 专用连接把 ALPN 限制为 http/1.1（h2-WS 未普及所致）。上一�
   server_name，系对方拨 IP 所致，属于场景差异而非指纹缺陷）。
 - ECH 路径维持 Chrome parrot + h1（与真实 Chrome WS+ECH 行为一致）。
 - 移除 vendored utls（third_party/），保留 TestH2WSProbe 作为平台行为记录。
+
+## 2026-09-20 客户端进程卫生：环境白名单 + masquerade 提前
+
+/proc/PID/environ 检查发现操作员启动 shell 的全部环境变量原样进入客户端
+（EMP_AGENT_UUID、EMP3R0R_PREFIX、PI_SESSION_FILE 等——真实 AI 工具进程
+不会有这些，同用户进程可直接读取）。
+
+- **util.SanitizedEnviron()**（lib/util/proc.go）：环境白名单，只保留标准
+  变量（PATH/HOME/SHELL/TERM/LANG/TZ/USER/LOGNAME/TMPDIR/XDG_*/DBUS/
+  DISPLAY/WAYLAND/XAUTHORITY）。masquerade 的 unix.Exec 与
+  ExecSelfReplace（!update 执行路径）都改用它。
+- **MasqueradeSelf 提前到 agent_main 最顶部**：此前排在 jitter 之后，新
+  实例有 0-5 分钟顶着磁盘名运行（裸 IoC 窗口）；且首启会双重 jitter。
+  现在：启动 → 立即 memfd 重入换装 → 唯一一次 jitter（掩护名下）→ 连接。
+- **genagent -o 参数落地**：此前 "-o" 根本未被解析（只认 --relay=），
+  "genagent -o /tmp/agent-stable" 从未写过该文件——全天重部署实际跑的都是
+  旧 stub 构建（ETXTBSY/静默旧写的双重陷阱）。现在 -o 真实复制构建产物，
+  输出 "Copied to:" 行；部署顺序固化为：重编 stub → genagent -o → 换进程。
+- 实测：新客户端 comm/exe/cmdline=gemini 三面一体、environ 仅 6 个标准
+  变量、jitter 在掩护名下进行。
