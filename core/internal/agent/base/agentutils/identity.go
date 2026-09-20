@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"path/filepath"
 	"sync"
 
@@ -202,7 +203,19 @@ func keyCacheKEK() ([]byte, error) {
 }
 
 func keyPersistDisabled() bool {
-	return os.Getenv("EMP_NO_KEY_PERSIST") != ""
+	if os.Getenv("EMP_NO_KEY_PERSIST") != "" {
+		return true
+	}
+	// Never let a test binary touch the operator's real key cache: a test
+	// run that reaches the identity path would fail the KEK decrypt (its
+	// runtime config differs), generate a fresh key, and silently overwrite
+	// the cached identity — every later restart then fails the CC's pin
+	// (observed 2026-09-20: one `go test ./internal/agent/...` run broke
+	// the running fleet).
+	if strings.HasSuffix(os.Args[0], ".test") || strings.Contains(filepath.Base(os.Args[0]), ".test") {
+		return true
+	}
+	return false
 }
 
 // saveCachedAgentKey encrypts the private key (PKCS#8) with AES-GCM and

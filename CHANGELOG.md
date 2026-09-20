@@ -1586,3 +1586,16 @@ WS 专用连接把 ALPN 限制为 http/1.1（h2-WS 未普及所致）。上一�
 - **新端点 POST /cf/accounts/{id}/test + 面板"功能测试（真实 WS 回环）"
   按钮**：按需对任意已部署账号跑探针（探针自带 CC 腿，standby 无需在线 CC）。
 - 实弹验证：活跃 relay 2408ms 通过、备用 relay 4167ms 通过。
+
+## 2026-09-20 附带发现：测试二进制会踩掉真实密钥缓存（已修）
+
+跑一次 `go test ./internal/agent/...` 导致在线 fleet 断连——测试进程到达
+agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 解密失败 → 生成
+新密钥并**静默覆盖** ~/.cache/mesa_shader_cache_db。此后所有客户端携带的
+缓存密钥与 CC 的 TOFU pin 永久失配（pinned key verification failed）。
+
+- **identity.go keyPersistDisabled**：测试二进制（os.Args[0] 以 .test 结尾）
+  一律禁用密钥缓存读写——测试永远不碰操作员的真实身份。
+- 修复现场：解密缓存（KEK=HKDF(password|uuid)）→ 导出公钥 → 重 pin DB
+  （UPDATE agents.public_key）→ 运行中客户端无需重启即恢复（密钥已在
+  进程内，18:08:14 pinned key verified）。
