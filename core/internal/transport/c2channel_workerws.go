@@ -62,13 +62,27 @@ func init() {
 // relay endpoints (used by tests to trust a local TLS server).
 var relayTLSRootCAs *x509.CertPool
 
+// alpnH1 / alpnH2Capable — the two ALPN lists we ever offer. The h2-capable
+// list is what real browsers send (Chrome: h2,http/1.1); the JA4 part-1
+// "h2" suffix only appears on those hellos. Our consumers (gorilla WS
+// upgrade, Go http1 transports) can only speak http/1.1, so an h2-capable
+// hello is a probe: if the edge negotiates h2 we close and re-dial h1-only
+// (double-hello, see browserTLSConnect).
+var (
+	alpnH1        = []string{"http/1.1"}
+	alpnH2Capable = []string{"h2", "http/1.1"}
+)
+
+// h2ProbeRoll decides whether a connection starts with the h2-capable
+// Chrome hello. Package var so tests can force the probe path.
+var h2ProbeRoll = func() bool { return util.RandInt(0, 2) == 0 }
+
 // browserHelloSpecs builds browser-mimicking ClientHello specs (Chrome /
-// Firefox / iOS) with one surgical change: the ALPN extension is rewritten to
-// offer only "http/1.1". Real browsers advertise h2 first, and if the edge
-// negotiates h2 the HTTP/1.1 WebSocket upgrade that follows would break.
-// Everything else — cipher suites, extensions, curves, GREASE — stays exactly
-// as the browser sends it, so the JA3/JA4 fingerprint looks authentic.
-func browserHelloSpecs() ([]*utls.ClientHelloSpec, error) {
+// Firefox / iOS) with one surgical change: the ALPN extension is set to
+// the given list. Everything else — cipher suites, extensions, curves,
+// GREASE — stays exactly as the browser sends it, so the JA3/JA4
+// fingerprint looks authentic.
+func browserHelloSpecs(alpn []string) ([]*utls.ClientHelloSpec, error) {
 	ids := []utls.ClientHelloID{
 		utls.HelloChrome_Auto,
 		utls.HelloFirefox_Auto,
@@ -83,7 +97,7 @@ func browserHelloSpecs() ([]*utls.ClientHelloSpec, error) {
 		replaced := false
 		for i, ext := range spec.Extensions {
 			if _, ok := ext.(*utls.ALPNExtension); ok {
-				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}}
+				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: alpn}
 				replaced = true
 			}
 		}
@@ -175,18 +189,30 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	return browserTLSConnect(dial, addr)
 }
 
+// negotiatedIsHTTP1 reports whether a completed handshake can carry our
+// HTTP/1.1 consumers: either the server selected http/1.1 or it declined
+// to pick any ALPN protocol (http/1.1 by default).
+func negotiatedIsHTTP1(u *utls.UConn) bool {
+	np := u.ConnectionState().NegotiatedProtocol
+	return np == "http/1.1" || np == ""
+}
+
 // browserHandshake wraps an established TCP connection in uTLS with a
-// randomized browser ClientHello (ALPN pinned to http/1.1). host may be a
+// randomized browser ClientHello (ALPN per the h2 flag). host may be a
 // host:port pair or a bare hostname; only the hostname is used for SNI and
 // certificate validation (system root pool — the endpoint is a CF domain).
-func browserHandshake(conn net.Conn, hostport string) (*utls.UConn, error) {
+func browserHandshake(conn net.Conn, hostport string, h2 bool) (*utls.UConn, error) {
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
 	}
 	cfg := &utls.Config{ServerName: host, RootCAs: relayTLSRootCAs}
+	alpn := alpnH1
+	if h2 {
+		alpn = alpnH2Capable
+	}
 	var uconn *utls.UConn
-	specs, specErr := browserHelloSpecs()
+	specs, specErr := browserHelloSpecs(alpn)
 	if specErr == nil && len(specs) > 0 {
 		spec := specs[util.RandInt(0, len(specs))]
 		uconn = utls.UClient(conn, cfg, utls.HelloCustom)
@@ -244,12 +270,38 @@ func BrowserLikeTLSDial(ctx context.Context, addr string, pinnedIPs []string) (n
 // the config, or a middlebox resets ECH ClientHellos). Availability first:
 // a failed ECH attempt disables ECH for a few minutes and triggers a
 // background config refresh.
+//
+// Double-hello (JA4 ALPN alignment): on ~half the connections we first
+// present an h2-capable browser hello ("h2,http/1.1" — the list real
+// Chrome sends, so the sensor-visible JA4 ends in "h2" and matches a real
+// Chrome). CF edges always negotiate h2, and our consumers (WS upgrade,
+// Go http1 transports) cannot speak h2 — so we close immediately and
+// re-dial with the h1-only spec. The retry close looks like an ordinary
+// h2-capable client stack falling back; the connection that actually
+// carries traffic always speaks http/1.1.
 func browserTLSConnect(dial func() (net.Conn, error), hostport string) (*utls.UConn, error) {
+	if h2ProbeRoll() {
+		u, err := tlsConnectOnce(dial, hostport, true)
+		if err == nil {
+			if negotiatedIsHTTP1(u) {
+				return u, nil // edge declined h2 — the conn is usable as-is
+			}
+			u.Close() // h2 negotiated, we cannot speak it — re-dial h1-only
+		}
+		// probe dial/handshake failed: fall through to the normal flow,
+		// which dials a fresh connection
+	}
+	return tlsConnectOnce(dial, hostport, false)
+}
+
+// tlsConnectOnce performs one dial+handshake pass with the given ALPN
+// posture (ECH when armed for the host, plain SNI otherwise).
+func tlsConnectOnce(dial func() (net.Conn, error), hostport string, h2 bool) (*utls.UConn, error) {
 	host := hostnameOfHostPort(hostport)
 	if e := echUsable(host); e != nil {
 		conn, err := dial()
 		if err == nil {
-			uconn, echErr := browserHandshakeECH(conn, hostport, e)
+			uconn, echErr := browserHandshakeECH(conn, hostport, e, h2)
 			if echErr == nil {
 				setECHStatus(host, "armed", "")
 				return uconn, nil
@@ -264,7 +316,7 @@ func browserTLSConnect(dial func() (net.Conn, error), hostport string) (*utls.UC
 	if err != nil {
 		return nil, err
 	}
-	return browserHandshake(conn, hostport)
+	return browserHandshake(conn, hostport, h2)
 }
 
 // hostnameOfHostPort splits "host:port" (or returns the input when it has
@@ -280,7 +332,7 @@ func hostnameOfHostPort(hostport string) string {
 // uTLS ECH path: Chrome and iOS. Firefox's spec trips a server-side
 // decode error in the ECH inner/outer extension compression (2026-09,
 // utls v1.8.2) — it stays available for plain connections only.
-func echBrowserSpecs() ([]*utls.ClientHelloSpec, error) {
+func echBrowserSpecs(alpn []string) ([]*utls.ClientHelloSpec, error) {
 	ids := []utls.ClientHelloID{utls.HelloChrome_Auto, utls.HelloIOS_Auto}
 	var specs []*utls.ClientHelloSpec
 	for _, id := range ids {
@@ -290,7 +342,7 @@ func echBrowserSpecs() ([]*utls.ClientHelloSpec, error) {
 		}
 		for i, ext := range spec.Extensions {
 			if _, ok := ext.(*utls.ALPNExtension); ok {
-				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}}
+				spec.Extensions[i] = &utls.ALPNExtension{AlpnProtocols: alpn}
 			}
 		}
 		specs = append(specs, &spec)
@@ -302,7 +354,7 @@ func echBrowserSpecs() ([]*utls.ClientHelloSpec, error) {
 // OUTER ClientHello masks the relay hostname behind the ECH public name;
 // the HPKE-encrypted inner keeps the real SNI. Requires uTLS's spec path
 // (ApplyPreset) + Config.EncryptedClientHelloConfigList.
-func browserHandshakeECH(conn net.Conn, hostport string, e *echEntry) (*utls.UConn, error) {
+func browserHandshakeECH(conn net.Conn, hostport string, e *echEntry, h2 bool) (*utls.UConn, error) {
 	host := hostnameOfHostPort(hostport)
 	cfg := &utls.Config{
 		ServerName:                    host, // the INNER SNI; cert validation target
@@ -310,7 +362,11 @@ func browserHandshakeECH(conn net.Conn, hostport string, e *echEntry) (*utls.UCo
 		MinVersion:                    utls.VersionTLS13,
 		EncryptedClientHelloConfigList: e.list,
 	}
-	specs, err := echBrowserSpecs()
+	alpn := alpnH1
+	if h2 {
+		alpn = alpnH2Capable
+	}
+	specs, err := echBrowserSpecs(alpn)
 	if err != nil || len(specs) == 0 {
 		conn.Close()
 		return nil, fmt.Errorf("ech specs: %w", err)

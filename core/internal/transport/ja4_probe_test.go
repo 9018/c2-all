@@ -53,26 +53,35 @@ func ja4FromRaw(raw []byte) (fp, alpn string, err error) {
 	extTypes := map[uint16]bool{}
 	var ciphers []string
 	for i := 0; i < csLen; i += 2 {
-		ciphers = append(ciphers, fmt.Sprintf("%04x", binary.BigEndian.Uint16(cipherBytes[i:])))
+		v := binary.BigEndian.Uint16(cipherBytes[i:])
+		if v&0x0f0f == 0x0a0a { // GREASE — JA4 excludes it
+			continue
+		}
+		ciphers = append(ciphers, fmt.Sprintf("%04x", v))
 	}
 	alpnFirst := "00"
 	for i := 0; i+4 <= extLen && i+4 <= len(b); {
 		et := binary.BigEndian.Uint16(b[i:])
 		elen := int(binary.BigEndian.Uint16(b[i+2:]))
-		extTypes[et] = true
+		if et&0x0f0f != 0x0a0a { // GREASE excluded from the JA4 list too
+			extTypes[et] = true
+		}
 		if et == 16 { // ALPN
-			// proto list: vec16 of (len8 + name)
-			pl := b[i+4 : i+4+elen]
-			if len(pl) >= 2 {
-				pn := int(pl[1])
-				if pn <= len(pl)-2 {
-					name := string(pl[2 : 2+pn])
-					if strings.HasPrefix(name, "http/1") {
-						alpnFirst = "h1"
-					} else if name == "h2" {
-						alpnFirst = "h2"
-					} else {
-						alpnFirst = name
+			// ext data: 2-byte total len, then entries of (len8 + name)
+			p := b[i+4 : i+4+elen]
+			if len(p) >= 2 {
+				q := p[2:]
+				if len(q) >= 1 {
+					pn := int(q[0])
+					if pn <= len(q)-1 {
+						name := string(q[1 : 1+pn])
+						if strings.HasPrefix(name, "http/1") {
+							alpnFirst = "h1"
+						} else if name == "h2" {
+							alpnFirst = "h2"
+						} else {
+							alpnFirst = name
+						}
 					}
 				}
 			}
@@ -108,34 +117,36 @@ func TestJA4OfOurHello(t *testing.T) {
 	if host == "" {
 		t.Skip("set ECH_PROBE_HOST to run")
 	}
-	specs, err := browserHelloSpecs()
-	if err != nil || len(specs) == 0 {
-		t.Fatalf("browserHelloSpecs: %v", err)
+	for _, alpn := range [][]string{alpnH1, alpnH2Capable} {
+		specs, err := browserHelloSpecs(alpn)
+		if err != nil || len(specs) == 0 {
+			t.Fatalf("browserHelloSpecs: %v", err)
+		}
+		seen := map[string]string{}
+		for i, spec := range specs {
+			conn, derr := net.DialTimeout("tcp4", host+":443", 10*time.Second)
+			if derr != nil {
+				t.Fatalf("dial: %v", derr)
+			}
+			cfg := &utls.Config{ServerName: host}
+			u := utls.UClient(conn, cfg, utls.HelloCustom)
+			if aerr := u.ApplyPreset(spec); aerr != nil {
+				t.Fatalf("apply preset: %v", aerr)
+			}
+			u.SetDeadline(time.Now().Add(12 * time.Second))
+			if herr := u.Handshake(); herr != nil {
+				t.Fatalf("handshake spec[%d]: %v", i, herr)
+			}
+			raw := u.HandshakeState.Hello.Raw
+			fp, gotAlpn, perr := ja4FromRaw(raw)
+			if perr != nil {
+				t.Fatalf("parse spec[%d]: %v", i, perr)
+			}
+			neg := u.ConnectionState().NegotiatedProtocol
+			seen[fp] = fmt.Sprintf("spec[%d]", i)
+			t.Logf("alpn=%v spec[%d]: JA4=%s (offered %s, edge picked %q)", alpn, i, fp, gotAlpn, neg)
+			u.Close()
+		}
 	}
-	seen := map[string]string{}
-	for i, spec := range specs {
-		conn, derr := net.DialTimeout("tcp4", host+":443", 10*time.Second)
-		if derr != nil {
-			t.Fatalf("dial: %v", derr)
-		}
-		cfg := &utls.Config{ServerName: host}
-		u := utls.UClient(conn, cfg, utls.HelloCustom)
-		if aerr := u.ApplyPreset(spec); aerr != nil {
-			t.Fatalf("apply preset: %v", aerr)
-		}
-		u.SetDeadline(time.Now().Add(12 * time.Second))
-		if herr := u.Handshake(); herr != nil {
-			t.Fatalf("handshake spec[%d]: %v", i, herr)
-		}
-		raw := u.HandshakeState.Hello.Raw
-		fp, alpn, perr := ja4FromRaw(raw)
-		if perr != nil {
-			t.Fatalf("parse spec[%d]: %v", i, perr)
-		}
-		seen[fp] = fmt.Sprintf("spec[%d]", i)
-		t.Logf("spec[%d]: JA4=%s (alpn offered: %s)", i, fp, alpn)
-		u.Close()
-	}
-	t.Logf("distinct JA4s presented: %d", len(seen))
-	t.Log("reference: real Chrome offers ALPN h2,http/1.1 -> part1 ends 'h2'")
+	t.Log("h2-capable hellos must end part1 with 'h2' (real Chrome); h1-only hellos end 'h1'")
 }

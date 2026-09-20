@@ -1496,3 +1496,23 @@ agent 面向的 relay 端点。
   Scripts API 的上传前置（无 subdomain 报 10063），不面向 agent。
 - **f8b31eff 账号暂挂**：无自定义域（kdns.fr 子域需操作员注册），已从
   standby 轮换中排除，注册子域后在面板粘贴 domain+zone_id 即可入列。
+
+## 2026-09-20 JA4 双 hello 对齐：ALPN 不再是"不存在的 Chrome"
+
+JA4 实测（TestJA4OfOurHello）暴露了已知缺口：我们的 ClientHello 带浏览器
+指纹但 ALPN 只 offer http/1.1——JA4 part1 的 "h1" 后缀是任何真实浏览器
+都不可能产生的组合，JA4-aware 传感器一眼识破。
+
+- **双 hello（browserTLSConnect）**：约一半连接先发 h2-capable 的浏览器
+  hello（`h2,http/1.1`——真 Chrome 列表，JA4 part1 "h2"）；CF 边缘必然
+  协商 h2 → 立即断开 → 以 h1-only spec 重拨。重试断连形似普通 h2 客户端
+  栈的回退；承载流量的连接始终 http/1.1。传感器可见面一半变成真 Chrome
+  JA4，且"不可能的 Chrome"h1 指纹不再独占呈现。
+- WS / DoH / extip / 诱饵全部走 browserTLSConnect → 统一受益。
+- ECH 路径同步支持（browserHandshakeECH 按 h2 标志选 ALPN 列表）。
+- 测试：TestDoubleHelloH2Probe（行为：probe-on 两次拨号 h2→http/1.1、
+  probe-off 单次 http/1.1）；TestRelayTLSBrowserFingerprint 更新到新契约
+  （返回连接必须 http/1.1；服务端可见序列必须 [h2,http/1.1] 成对或单个
+  http/1.1）。TestWorkerWSChannelE2E / TestSecureConnOverRelay 为环境性
+  失败（需 wrangler dev --port 8806），与本次无关。
+- 后续（T2 候选）：RFC 8441 WebSocket-over-HTTP/2 才能彻底消除 h1 hello。
