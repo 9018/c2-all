@@ -260,7 +260,7 @@ func nextStandbyAccount(cfg *cfAccountsConfig) *CFAccount {
 	// active account not found (fresh fleet): take the first usable entry
 	if idx == -1 {
 		for _, a := range cfg.Accounts {
-			if a.APIToken != "" {
+			if a.APIToken != "" && hasCustomDomain(a) {
 				return a
 			}
 		}
@@ -268,11 +268,19 @@ func nextStandbyAccount(cfg *cfAccountsConfig) *CFAccount {
 	}
 	for step := 1; step <= len(cfg.Accounts); step++ {
 		cand := cfg.Accounts[(idx+step)%len(cfg.Accounts)]
-		if cand.ID != cfg.ActiveAccountID && cand.APIToken != "" {
+		if cand.ID != cfg.ActiveAccountID && cand.APIToken != "" && hasCustomDomain(cand) {
 			return cand
 		}
 	}
 	return nil
+}
+
+// hasCustomDomain reports whether the account can host a reachable relay:
+// custom-domain policy requires domain+zone_id — workers.dev is not an
+// acceptable relay endpoint (unreachable from some networks, so a
+// domain-less account would strand the fleet on migration).
+func hasCustomDomain(a *CFAccount) bool {
+	return a.Domain != "" && a.ZoneID != ""
 }
 
 // sortedHistory returns migration history newest-first (for the panel).

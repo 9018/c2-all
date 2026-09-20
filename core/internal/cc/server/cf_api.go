@@ -278,6 +278,12 @@ func handleWebCFDeploy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account is already the active relay host"})
 		return
 	}
+	// Custom-domain policy: workers.dev is not an acceptable relay endpoint.
+	if target.Domain == "" || target.ZoneID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "account has no custom domain configured — set domain+zone_id first (workers.dev is not used as a relay endpoint)"})
+		return
+	}
 
 	workerName := cfg.WorkerName
 	if workerName == "" {

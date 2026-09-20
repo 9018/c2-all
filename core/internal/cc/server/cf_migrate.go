@@ -114,6 +114,12 @@ func MigrateRelayTo(targetID, reason string) error {
 	if target.APIToken == "" {
 		return fmt.Errorf("account %s has no API token", targetID)
 	}
+	// Custom-domain policy: workers.dev is not an acceptable relay endpoint
+	// (unreachable from some networks, and a domain-less account would land
+	// the whole fleet there on migration). Require a configured zone.
+	if target.Domain == "" || target.ZoneID == "" {
+		return fmt.Errorf("account %s has no custom domain configured — set domain+zone_id first (workers.dev is not used as a relay endpoint)", targetID)
+	}
 	active, err := cfActiveAccount()
 	if err != nil {
 		// no active account yet: treat as initial deployment

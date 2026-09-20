@@ -1480,3 +1480,19 @@ exe=/memfd:gpt4all (deleted)、environ 干净、ECH armed + checkin 正常、
   稳定无拆除。另修正 MarkAgentActive 只在真命令时打点——CC 每次 hello
   都推 PeerList，此前会永久遮蔽空转状态。
 - genagent 挪到持久路径 ~/c2/bin/genagent（/tmp 清理反复吃掉它）。
+
+## 2026-09-20 全面自定义域名：淘汰 workers.dev
+
+运营策略变更：workers.dev 在部分网络（含 CN）不可达，不再作为任何
+agent 面向的 relay 端点。
+
+- **MigrateRelayTo / POST /cf/accounts/{id}/deploy / nextStandbyAccount**
+  三处全部加自定义域名守卫：domain+zone_id 未配置的账号拒绝迁移/部署/
+  参与轮换——防止 fleet 落到不可达端点。
+- **j6k5as4z6k 备用 relay 已部署**：wss://relay.j6k5as4z6k.kdns.fr
+  （自定义域，健康检查通过）。agent 内嵌端点已含此地址（此前 failover
+  日志可见 DoH re-homed 到它）。
+- deployRelayWorker 里的 ensureWorkersDevSubdomain 保留——它是 CF
+  Scripts API 的上传前置（无 subdomain 报 10063），不面向 agent。
+- **f8b31eff 账号暂挂**：无自定义域（kdns.fr 子域需操作员注册），已从
+  standby 轮换中排除，注册子域后在面板粘贴 domain+zone_id 即可入列。
