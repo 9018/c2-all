@@ -1631,3 +1631,19 @@ agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 
 - 测试门控：PERSIST_REAL_DRILL=1 才跑真实会话；默认 skip。演练三件套
   （生命周期 / 碰撞 / 删除语义）容器内全过，容器销毁后宿主机复核
   crontab/systemd 零残留。
+
+## 2026-09-20 持久化部署优化
+
+- **幂等落盘**：副本已存在且内容匹配时跳过重写（避免无谓 I/O 和时间戳变动）。
+- **systemd 单元加固**：`StartLimitBurst=5` + `StartLimitIntervalSec=600`
+  ——崩溃循环限速为 10 分钟 5 次重试，超出后进入 failed 状态静默，不再每
+  20-90s 持续刷 journal（取证噪音降低）。
+- **安装健康检查**：`!persist install` 后轮询 `is-active` 状态，返回
+  `health=running|failed|activating`，面板可直接看到启动是否真正成功。
+- **`--all` 标志**：`!persist install --all` 同时安装所有机制（多层保险），
+  适合关键据点。
+- **`--force` 标志**：覆盖碰撞防护，操作员明确知道覆盖对象时使用。
+- **全量清理**：`!persist remove` 不再只清理当前掩护名——扫描所有机制中带
+  `ai-agent autostart` 标记的条目（含孤儿条目），一并清除。
+- Docker systemd 实验室（Ubuntu 24.04 + systemd 255 + 独立用户会话）验证
+  通过，宿主机零接触。

