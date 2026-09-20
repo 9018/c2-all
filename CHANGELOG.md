@@ -1599,3 +1599,18 @@ agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 
 - 修复现场：解密缓存（KEK=HKDF(password|uuid)）→ 导出公钥 → 重 pin DB
   （UPDATE agents.public_key）→ 运行中客户端无需重启即恢复（密钥已在
   进程内，18:08:14 pinned key verified）。
+
+## 2026-09-20 持久化加固：碰撞防护 + 原子安装 + 生命周期演练
+
+- **碰撞防护（dropPersistCopy）**：掩护名可能是用户真实在用的工具
+  （~/.local/bin/claude、codex 是常见真实 CLI）。持久化副本落盘前比对
+  现存内容——不是自身镜像就拒绝覆盖（"refusing to overwrite a real
+  tool"），防止 !persist install 毁掉用户的真实工具。
+- **systemd 安装原子化**：unit 文件先写、enable 失败会残留半装状态
+  （status 按文件存在判定 → 幽灵安装）。现在 daemon-reload/enable 任一
+  失败即清理 unit 文件并回滚 daemon-reload。
+- **生命周期演练测试**（persist_drill_test.go，隔离 HOME）：drop →
+  install(auto) → status → remove → 全净；碰撞拒绝 + 真实工具字节不动。
+  演练当场抓出 systemd/cron 状态判定不一致的 bug（原子化修复后一致）。
+- cron install/remove 实测真实 crontab 无残留（用户级 crontab 不随 HOME
+  隔离——演练的 remove 路径已验证清理干净）。
