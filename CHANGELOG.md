@@ -1647,3 +1647,15 @@ agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 
   `ai-agent autostart` 标记的条目（含孤儿条目），一并清除。
 - Docker systemd 实验室（Ubuntu 24.04 + systemd 255 + 独立用户会话）验证
   通过，宿主机零接触。
+
+## 2026-09-20 前端 PTY 功能端到端实测
+
+用 Python websockets 模拟真实前端行为，对 PTY shell 做全链路功能测试
+（不是 HTTP 200 空检查）：
+
+- **生命周期 6/6 全过**：HTTP POST 启动 → WS 收 prompt → pty_input 发
+  命令 → pty_output 含标记 → pty_resize → pty_close → 确认 session
+  not found。
+- **多会话隔离 9/9 全过**：3 个并发会话各自启动/prompt/输入/输出完全
+  隔离（各自标记不出现在其他会话的输出中）。
+- 测试路径：/tmp/test_pty_e2e.py，C2_HOST 环境变量可配。
