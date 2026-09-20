@@ -144,18 +144,17 @@ func TestRelayTLSBrowserFingerprint(t *testing.T) {
 		}
 	}
 
-	// sensor-facing contract: the server-visible sequence is a
-	// concatenation of [http/1.1] and [h2, http/1.1] probe pairs — an h2
-	// hello must always be immediately followed by its http/1.1 retry
-	for i := 0; i < len(protos); i++ {
-		switch {
-		case protos[i] == "http/1.1":
-		case protos[i] == "h2" && i+1 < len(protos) && protos[i+1] == "http/1.1":
-			i++ // the retry belongs to this probe
-		default:
-			t.Fatalf("server-visible proto %q at %d breaks the double-hello contract: %v", protos[i], i, protos)
+	// sensor-facing contract (WS path): a real Chrome opening a WebSocket
+	// connects ONCE with an h1-only ALPN — no h2 probes here. Every
+	// server-visible handshake must be http/1.1.
+	if len(protos) != len(clientProtos) {
+		t.Fatalf("server saw %d handshakes for %d dials — the WS path must not double-hello: %v",
+			len(protos), len(clientProtos), protos)
+	}
+	for i, p := range protos {
+		if p != "http/1.1" {
+			t.Fatalf("server-visible proto %q at %d, want http/1.1 (real-Chrome WS shape): %v", p, i, protos)
 		}
 	}
-	t.Logf("%d server-visible handshakes, all %d returned conns http/1.1 — double-hello contract OK (%v)",
-		len(protos), len(clientProtos), protos)
+	t.Logf("%d dials, each a single http/1.1 hello — real-Chrome-WS contract OK", len(clientProtos))
 }

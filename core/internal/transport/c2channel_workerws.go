@@ -101,6 +101,22 @@ func browserHelloSpecs(alpn []string) ([]*utls.ClientHelloSpec, error) {
 				replaced = true
 			}
 		}
+		// Real browsers drop the ALPS extension (17613) on WebSocket-
+		// restricted connections - ALPS carries h2 settings and only rides
+		// hellos that offer h2. Verified against a live Chromium wss://
+		// capture (see TestJA4ExtListDiff): the traffic-carrying WS hello
+		// must be the browser WS shape, h1 ALPN, no ALPS.
+		if len(alpn) == 1 && alpn[0] == "http/1.1" {
+			kept := spec.Extensions[:0]
+			for _, ext := range spec.Extensions {
+				switch ext.(type) {
+				case *utls.ApplicationSettingsExtension, *utls.ApplicationSettingsExtensionNew:
+					continue // ALPS rides h2-capable hellos only
+				}
+				kept = append(kept, ext)
+			}
+			spec.Extensions = kept
+		}
 		if replaced {
 			specs = append(specs, &spec)
 		}
@@ -186,7 +202,7 @@ func dialRelayTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 		// fallback: OS resolution (same behavior as before DoH pinning)
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	}
-	return browserTLSConnect(dial, addr)
+	return browserTLSConnect(dial, addr, false) // WS: single h1-only, like a real browser WS
 }
 
 // negotiatedIsHTTP1 reports whether a completed handshake can carry our
@@ -261,7 +277,7 @@ func BrowserLikeTLSDial(ctx context.Context, addr string, pinnedIPs []string) (n
 		}
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
 	}
-	return browserTLSConnect(dial, addr)
+	return browserTLSConnect(dial, addr, true) // non-WS: h2 probe
 }
 
 // browserTLSConnect dials via the given closure and handshakes with ECH
@@ -271,16 +287,15 @@ func BrowserLikeTLSDial(ctx context.Context, addr string, pinnedIPs []string) (n
 // a failed ECH attempt disables ECH for a few minutes and triggers a
 // background config refresh.
 //
-// Double-hello (JA4 ALPN alignment): on ~half the connections we first
-// present an h2-capable browser hello ("h2,http/1.1" — the list real
-// Chrome sends, so the sensor-visible JA4 ends in "h2" and matches a real
-// Chrome). CF edges always negotiate h2, and our consumers (WS upgrade,
-// Go http1 transports) cannot speak h2 — so we close immediately and
-// re-dial with the h1-only spec. The retry close looks like an ordinary
-// h2-capable client stack falling back; the connection that actually
-// carries traffic always speaks http/1.1.
-func browserTLSConnect(dial func() (net.Conn, error), hostport string) (*utls.UConn, error) {
-	if h2ProbeRoll() {
+// h2Probe (non-WS paths only): on ~half the connections we first present
+// an h2-capable browser hello ("h2,http/1.1" — what a real Chrome page
+// load sends) then close when the edge negotiates h2 and re-dial with the
+// h1-only spec, since our Go http1 transports cannot speak h2. WebSocket
+// dials MUST NOT probe: a real Chrome opening a WebSocket advertises
+// http/1.1 only and connects once (verified against live Chromium —
+// TestJA4AnalyzePeekedHello), so the WS path passes h2Probe=false.
+func browserTLSConnect(dial func() (net.Conn, error), hostport string, h2Probe bool) (*utls.UConn, error) {
+	if h2Probe && h2ProbeRoll() {
 		u, err := tlsConnectOnce(dial, hostport, true)
 		if err == nil {
 			if negotiatedIsHTTP1(u) {

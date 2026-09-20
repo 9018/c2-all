@@ -125,7 +125,7 @@ func TestDoubleHelloH2Probe(t *testing.T) {
 		mu.Lock(); *seen = nil; mu.Unlock()
 		conn, err := browserTLSConnect(func() (net.Conn, error) {
 			return net.DialTimeout("tcp4", addr, 5*time.Second)
-		}, addr)
+		}, addr, true) // non-WS consumer: probe on
 		if err != nil {
 			t.Fatalf("browserTLSConnect: %v", err)
 		}
@@ -153,7 +153,7 @@ func TestDoubleHelloH2Probe(t *testing.T) {
 		mu.Lock(); *seen = nil; mu.Unlock()
 		conn, err := browserTLSConnect(func() (net.Conn, error) {
 			return net.DialTimeout("tcp4", addr, 5*time.Second)
-		}, addr)
+		}, addr, true) // roll forced off below; non-WS consumer
 		if err != nil {
 			t.Fatalf("browserTLSConnect: %v", err)
 		}

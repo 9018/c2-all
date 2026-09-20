@@ -1516,3 +1516,36 @@ JA4 实测（TestJA4OfOurHello）暴露了已知缺口：我们的 ClientHello �
   http/1.1）。TestWorkerWSChannelE2E / TestSecureConnOverRelay 为环境性
   失败（需 wrangler dev --port 8806），与本次无关。
 - 后续（T2 候选）：RFC 8441 WebSocket-over-HTTP/2 才能彻底消除 h1 hello。
+
+## 2026-09-20 T2 结论：真实 Chrome 的 WS 指纹才是正解（三项实证）
+
+### 实证 1：CF 全线不支持 RFC 8441（h2-WS 死路）
+TestH2WSProbe：向 relay 与 www.cloudflare.com 发 h2 扩展 CONNECT
+（:protocol=websocket）——两边都不广播 SETTINGS_ENABLE_CONNECT_PROTOCOL
+且扩展 CONNECT 一律 400（cf-ray 为空，未到 Worker）。Chrome 自己也不会
+在这里尝试 h2-WS。**CF 平台上真 h2-WS 不可行，放弃。**
+
+### 实证 2：CF 的 ECH 边缘从 OUTER hello 选 ALPN
+vendored utls + Config.ECHOuterALPN 补丁验证 outer/inner ALPN 分裂：
+inner=h1、outer=[h2] 时 CF 选了 h2（服务器视角与客户端 inner 校验冲突报
+"server selected unadvertised ALPN"）。分裂机制可行但语义上无收益，补丁
+已移除（回归 stock utls）。
+
+### 实证 3（最重要）：真 Chrome 开 WebSocket 本来就只广播 h1
+/TestJA4AnalyzePeekedHello：捕获真实 Chromium 的 wss:// ClientHello——
+JA4=t13d1514h1_8daaf6152771_df8f8f7ef8c0，**part1 以 h1 结尾**。Chrome 对
+WS 专用连接把 ALPN 限制为 http/1.1（h2-WS 未普及所致）。上一条目所谓
+"不存在的 Chrome" 是误判：Chrome-parrot+h1 恰是真实浏览器 WS 的原生指纹
+（part2=8daaf6152771 与 FoxIO 官方 Chrome 参考值一致）。
+
+### 依据实证的修正
+- **WS 路径撤掉双 hello**（browserTLSConnect dialRelayTLS 传 h2Probe=false）：
+  真 Chrome 开 WS 是"单次连接 + h1-only"，探测反而是画蛇添足。
+- **非 WS 路径（DoH/extip/诱饵）保留双 hello**：页载的真实形态是 h2，
+  探测让一半 hello 呈现真 Chrome 页载指纹。
+- **h1-only 时剥离 ALPS(17613)**：ALPS 携带 h2 设置，真实浏览器在 WS 连接
+  上不发。剥离后 Chrome parrot 的 WS JA4 = t13d1515h1_8daaf6152771_…，
+  与真实 Chromium 对域名开 wss:// 的扩展集合完全一致（实测捕获差 1 个
+  server_name，系对方拨 IP 所致，属于场景差异而非指纹缺陷）。
+- ECH 路径维持 Chrome parrot + h1（与真实 Chrome WS+ECH 行为一致）。
+- 移除 vendored utls（third_party/），保留 TestH2WSProbe 作为平台行为记录。
