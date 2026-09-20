@@ -1614,3 +1614,20 @@ agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 
   演练当场抓出 systemd/cron 状态判定不一致的 bug（原子化修复后一致）。
 - cron install/remove 实测真实 crontab 无残留（用户级 crontab 不随 HOME
   隔离——演练的 remove 路径已验证清理干净）。
+
+## 2026-09-20 持久化删除语义实证（Docker systemd 隔离环境）
+
+用户关注"删了副本还会自启吗"——持久化删除语义在 Docker 容器（Ubuntu 24.04
++ systemd 255 + 独立用户会话 + linger）内实证，宿主机零接触：
+
+- **删掉盘上副本 ⇒ 自启的"效果"死亡**：单元仍在（enabled），ExecStart 每
+  20-90s 重试一次但二进制不存在（ExecMainStatus=203/EXEC）——**没有任何
+  进程能跑起来**。Type=simple 的 systemctl 返回 0 是 fork 派发语义，进程
+  实际从未运行。
+- 附带效应：若副本被重新落盘（如重装），循环会在下个 RestartSec 内自动
+  捡起运行——一种自愈属性。
+- 代价：副本删除后单元进入无害的慢循环（journal 每 RestartSec 一行
+  "No such file or directory"），直到 remove/重启。
+- 测试门控：PERSIST_REAL_DRILL=1 才跑真实会话；默认 skip。演练三件套
+  （生命周期 / 碰撞 / 删除语义）容器内全过，容器销毁后宿主机复核
+  crontab/systemd 零残留。
