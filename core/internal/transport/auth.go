@@ -62,11 +62,26 @@ func VerifyMsgAuth(auth *def.MsgAuth) error {
 		return fmt.Errorf("decode identity token: %w", err)
 	}
 	ok, err := VerifySignatureWithCA([]byte(auth.AgentUUID), caSig)
-	if err != nil {
-		return fmt.Errorf("CA token verification failed: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("CA token verification failed")
+	if err != nil || !ok {
+		// Multi-host fallback: the presented UUID was derived on-host from a
+		// trusted build. The build's CA signature covers the PARENT UUID; the
+		// per-host binding is proven in the checkin payload (AgentProof is
+		// verified there against the presented session key). Accept the frame
+		// when the parent's CA signature checks out and the two UUIDs differ.
+		if auth.ParentUUID != "" && auth.ParentUUID != auth.AgentUUID {
+			if parentOK, parentErr := VerifySignatureWithCA([]byte(auth.ParentUUID), caSig); parentErr == nil && parentOK {
+				if auth.AgentProof == "" {
+					return fmt.Errorf("multi-host auth missing agent proof")
+				}
+			} else {
+				return fmt.Errorf("CA token verification failed (parent fallback: %v)", parentErr)
+			}
+		} else {
+			if err != nil {
+				return fmt.Errorf("CA token verification failed: %w", err)
+			}
+			return fmt.Errorf("CA token verification failed")
+		}
 	}
 
 	// AgentProof is a signature using the agent's pinned public key (TOFU).

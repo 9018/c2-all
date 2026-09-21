@@ -129,11 +129,18 @@ func main() {
 	// The build itself always lands in the workspace (timestamped name);
 	// without -o handling operators could silently run stale copies.
 	outCopy := ""
+	multiHost := false
 	for i := 0; i < len(os.Args[1:]); i++ {
 		arg := os.Args[1:][i]
 		if strings.HasPrefix(arg, "--relay=") {
 			relayMode = true
 			relayRoom = strings.TrimPrefix(arg, "--relay=")
+		}
+		if arg == "--multi-host" {
+			// One binary, many hosts: the agent derives a fresh per-host UUID
+			// on first run instead of using this build's UUID (which would
+			// collide on the CC's TOFU pin when deployed to a second host).
+			multiHost = true
 		}
 		if arg == "-o" && i+1 < len(os.Args[1:]) {
 			outCopy = os.Args[1:][i+1]
@@ -145,6 +152,14 @@ func main() {
 	if err := builder.MakeConfig(opts); err != nil {
 		fmt.Printf("Failed to make config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Multi-host flag must be applied AFTER MakeConfig (it re-reads the JSON
+	// config and clobbers RuntimeConfig).
+	if multiHost {
+		live.RuntimeConfig.MultiHost = true
+		live.RuntimeConfig.AgentUUIDParent = agentUUID
+		fmt.Printf("Multi-host mode: agents will derive per-host UUIDs (parent %s)\n", agentUUID)
 	}
 
 	// Apply relay override AFTER MakeConfig (which re-reads the JSON config)

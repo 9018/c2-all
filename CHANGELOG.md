@@ -1718,3 +1718,28 @@ agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取�
   ② 错误命令反馈经 relay：'Error: unknown command' 到达面板 ✓
 - 测试技巧记录：PTY 回显会包含命令字面量，断言 marker 须用 $(...)
   展开后才存在的形态，否则回显先命中导致假失败。
+
+## 2026-09-22 Multi-host 模式：一包多机 + Ubuntu 22.04 部署压测
+
+用户指出"部署一个客户端就要改一次 UUID 重新编译"不成立。实现 MultiHost：
+
+- **agent 端**：`ApplyHostIdentity()` 在首次运行派生每主机 UUID（与身份
+  密钥一起加密缓存在 key cache v2 JSON 信封，旧格式兼容），重启恢复同
+  一身份；覆盖 RuntimeConfig.AgentUUID，下游（Tag/sysinfo/checkin）无感。
+- **协议**：MsgAuth 增加 ParentUUID 字段——CC 的 CA 验证对派生 UUID 失败
+  时回退验证父构建 UUID 的 CA 签名（持有二进制即持有一切，信任级别不
+  变），K 绑定证明由 checkin 载荷现有逻辑验证。
+- **genagent**：`--multi-host` 旗子注入配置（MultiHost + AgentUUIDParent）。
+- CC 准入路径不变：未知 UUID 走 TOFU（本来就支持）。
+
+部署压测（同一个 md5=fa67daff 二进制，两台机器）：
+- CentOS 7（room-b relay）派生 a6d558b2 ✓
+- Ubuntu 22.04（room-b relay）派生 bb1dbcfc ✓
+- 同前次教训对照：旧方案第二台会被 TOFU pin 拒（"key rotation"）。
+
+压测数据（两台同时，经 Cloudflare relay）：
+- 2 台 × 8 并发 PTY × 3 轮命令 = 16/16 全过，平均延迟 0.68s
+- 大输出：Ubuntu 6.8MB 经 PTY 668 KB/s 完成；CentOS 在单行超 PTY
+  规范行缓冲的病态用例下停滞（文件传输应走文件管理器分片通道）
+- 测试基建：WS 中心分发器（并发 recv 同一 socket 会 ConcurrencyError，
+  单读者+按 JobID 队列是正确姿势）

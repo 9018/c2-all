@@ -44,5 +44,11 @@ func sendMsgAuthEnvelope(w io.Writer, capabilities []string, streamID string) er
 		Capabilities:  capabilities,
 		StreamID:      streamID,
 	}
+	// Multi-host: the CA sig covers the PARENT build UUID; AgentUUID is the
+	// per-host derived identity. The CC verifies the parent's CA signature
+	// and defers the K-binding to the checkin payload.
+	if cfg.AgentUUIDParent != "" && cfg.AgentUUIDParent != cfg.AgentUUID {
+		msg.ParentUUID = cfg.AgentUUIDParent
+	}
 	return cbor.NewEncoder(w).Encode(msg)
 }

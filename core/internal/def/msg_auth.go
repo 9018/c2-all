@@ -15,4 +15,5 @@ type MsgAuth struct {
 	AgentProof     string   `cbor:"17,keyasint"` // optional agent-key signature over canonical auth string (base64)
 	EphemPublicKey []byte   `cbor:"18,keyasint"` // optional ephemeral key for early key-exchange workflows
 	StreamID       string   `cbor:"19,keyasint"` // optional identifier for a continuous stream (e.g. file transfer token)
+	ParentUUID     string   `cbor:"20,keyasint"` // multi-host: build UUID whose CA sig covers IdentityToken; AgentUUID is derived per host
 }

