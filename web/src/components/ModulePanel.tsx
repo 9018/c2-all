@@ -66,14 +66,14 @@ function ModuleExecute({ module: mod, onClose }: {
   module: ModuleConfig
   onClose: () => void
 }) {
-  const { activeAgent } = useStore()
+  const { activeAgent, agents, setActiveAgent } = useStore()
   const [params, setParams] = useState<Record<string, string>>({})
   const [executing, setExecuting] = useState(false)
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null)
 
   const handleSubmit = async () => {
     if (!activeAgent) {
-      setResult({ success: false, message: 'No agent selected' })
+      setResult({ success: false, message: 'No agent selected — pick a target above' })
       return
     }
 
@@ -118,6 +118,24 @@ function ModuleExecute({ module: mod, onClose }: {
               <p className="text-xs text-gray-500">{mod.Platform}</p>
             </div>
           </div>
+          {/* 指定目标 agent（执行前最后一道选择）*/}
+          <select
+            value={activeAgent?.Tag || ''}
+            onChange={(e) => setActiveAgent(e.target.value)}
+            className={`px-2 py-1.5 rounded-lg text-xs border max-w-[200px] truncate ${
+              activeAgent
+                ? 'bg-gray-800 border-gray-700 text-gray-200'
+                : 'bg-yellow-500/20 border-yellow-600 text-yellow-300'
+            }`}
+            title="Target agent"
+          >
+            <option value="" disabled>— 选择目标 Agent —</option>
+            {agents.map((a) => (
+              <option key={a.UUID} value={a.Tag}>
+                {(a.Hostname || a.Name || a.Tag)} [{a.ShortID}]
+              </option>
+            ))}
+          </select>
           <button
             onClick={onClose}
             className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
@@ -237,14 +255,15 @@ function ParameterInput({
 }
 
 export function ModulePanel() {
-  const { modules, loadingModules, fetchModules, activeAgent } = useStore()
+  const { modules, loadingModules, fetchModules, fetchAgents, agents, activeAgent, setActiveAgent } = useStore()
   const [filter, setFilter] = useState('')
   const [selectedModule, setSelectedModule] = useState<ModuleConfig | null>(null)
   const [platformFilter, setPlatformFilter] = useState<string>('all')
 
   useEffect(() => {
     fetchModules()
-  }, [fetchModules])
+    fetchAgents()
+  }, [fetchModules, fetchAgents])
 
   const filteredModules = Object.values(modules).filter((mod) => {
     const matchesFilter = 
@@ -276,6 +295,20 @@ export function ModulePanel() {
               <span className="md:hidden">No agent</span>
             </div>
           )}
+          {/* 指定目标 agent：执行模块前必须明确打到哪台 */}
+          <select
+            value={activeAgent?.Tag || ''}
+            onChange={(e) => setActiveAgent(e.target.value)}
+            className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-200 max-w-[220px] truncate"
+            title="Target agent for module execution"
+          >
+            <option value="" disabled>— 选择目标 Agent —</option>
+            {agents.map((a) => (
+              <option key={a.UUID} value={a.Tag}>
+                {(a.Hostname || a.Name || a.Tag)} [{a.ShortID}]
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Filters */}

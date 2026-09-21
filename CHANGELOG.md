@@ -1757,3 +1757,32 @@ agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取�
 - 20 连发：20/20，RTT avg=0.671s max=0.685s（方差极小，链路稳定）
 - 错误反馈：PASS
 - 资源：目标机负载 0.00（压测后），内存 315MB/7.8GB；CC 端 RSS 67MB
+
+## 2026-09-22 前端 Modules 指定 Agent + 多账号热迁移修复与验证
+
+### 前端：Modules 面板可指定目标 Agent
+- ModulePanel 头部新增 agent 下拉选择器（绑定 store.setActiveAgent）
+- ModuleExecute 弹窗内同样可选目标，未选时提示
+- 验证：UI 选择 CentOS 会话 → Execute → CC 收到 !custom_module 并下发 ✓
+- 前端已重建并部署到 ~/.emp3r0r/web/
+
+### 热迁移修复（3 处协同）
+1. relay_do.js：支持 CC 发来的 migrate-notice 文本帧（tag 广播给所有 agent）。
+   根因：MIGRATE_URL 重部署只影响新 DO 实例，已建连的 socket 永远收不到
+   close(4002)，会在"活着的死连接"上永久挂起。
+2. agent 端 relayConn.Read：解析 migrate 文本帧 → 记录新端点并断开重拨。
+3. CC cf_migrate.go：重指向旧 worker 之前，先经旧房间 DO 广播迁移通知。
+
+### 构建链修复（压测中发现）
+- PatchAgentBinary 用"第一段 4096×0xFF"定位占位区——重编译后的 stub 含更早
+  的 0xFF 对齐段，config 被写错位置导致 agent 自解密失败。改为 16 字节魔数
+  （EMP3CFGv1）定位 + 占位区完整性校验。
+- genagent --relay 参数是房间名不是域名；误传域名会生成错误房间 URL。
+
+### 双向热迁移实测（163 唯一测试平台，agent 建连状态下）
+- 迁移 1 zhpmt8ymbc → j6k5as4z6k：agent 03:19:15 收到通知，自动切换并
+  重新签到 ✓（DoH 同步 re-home）
+- 迁移 2 迁回 zhpmt8ymbc：migrate-notice 即时通知，10 秒内完成 ✓
+- 迁移后 PTY 均正常 ✓
+- 注意：面板 agents 的 Transport 字段是注册时静态 URL，不反映迁移后实际
+  端点；判断迁移状态应看 agent 日志或 cc 端连接。

@@ -513,6 +513,24 @@ func relayMigrationClose(err error) (string, bool) {
 	return target, true
 }
 
+// migrateNoticeEndpoint parses a relay text frame that carries the
+// CC-initiated migration notice ({"t":"migrate","to":"wss://..."}).
+// Returns "" for every other control frame.
+func migrateNoticeEndpoint(data []byte) string {
+	var m struct {
+		T  string `json:"t"`
+		To string `json:"to"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil || m.T != "migrate" {
+		return ""
+	}
+	target := strings.TrimSpace(m.To)
+	if !strings.HasPrefix(target, "ws://") && !strings.HasPrefix(target, "wss://") {
+		return ""
+	}
+	return target
+}
+
 func (r *relayConn) Read(p []byte) (int, error) {
 	for {
 		if r.rbuf.Len() > 0 {
@@ -526,7 +544,17 @@ func (r *relayConn) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if mt == websocket.TextMessage {
-			// control frame from relay (hello/pong/agent-joined) — ignore on data path
+			// control frame from relay (hello/pong/agent-joined). Also carries the
+			// CC-broadcast migration notice relayed by the DO: a MIGRATE_URL
+			// redeploy only reaches NEW DO instances, so already-connected
+			// sockets would never see close(4002). On the notice, record the
+			// announced endpoint and break the read loop — the tunnel tears
+			// down, and the connector's dial loop re-dials RelayMigration().
+			if target := migrateNoticeEndpoint(data); target != "" {
+				SetRelayMigration(target)
+				logging.Warningf("relay migrated by operator to %s, re-dialing", target)
+				return 0, fmt.Errorf("relay migrated to %s", target)
+			}
 			continue
 		}
 		if r.isCC {
@@ -562,6 +590,18 @@ func (r *relayConn) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// WriteText sends a relay control text frame (hello/pong/migrate-notice).
+// Text frames bypass the tag framing and the secure stream: the DO consumes
+// them on the control path.
+func (r *relayConn) WriteText(p []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("relay closed")
+	}
+	return r.conn.WriteMessage(websocket.TextMessage, p)
 }
 
 func (r *relayConn) Close() error {
@@ -718,4 +758,36 @@ func (w *WorkerWSChannelWrapper) Dial(ctx context.Context, client *http.Client, 
 // Accept is not used on the agent side.
 func (w *WorkerWSChannelWrapper) Accept(w2 http.ResponseWriter, req *http.Request) (io.ReadWriteCloser, error) {
 	return nil, errors.New("Accept not implemented for worker_ws (CC uses CCRelayListener)")
+}
+
+// NotifyRelayMigration asks the relay DO behind oldURL to broadcast a
+// migration notice to every agent still connected on the OLD deployment.
+//
+// Why this exists: repointing the old worker (MIGRATE_URL env) only reaches
+// NEW DO instances — sockets already established keep serving the old code,
+// so their agents never receive close(4002) and hang on a connection whose
+// CC peer is gone. Dialing the old room as a CC while its listeners are
+// still up and sending a text control frame reaches those live agents
+// directly; they re-dial the announced endpoint immediately.
+func NotifyRelayMigration(ctx context.Context, oldURL, migrateURL string) error {
+	rc, _, err := dialRelay(ctx, oldURL)
+	if err != nil {
+		return fmt.Errorf("notify: dial %s: %w", redactRelaySecret(oldURL), err)
+	}
+	defer rc.Close()
+	notice, _ := json.Marshal(map[string]string{"t": "migrate-notice", "to": migrateURL})
+	if err := rc.WriteText(notice); err != nil {
+		return fmt.Errorf("notify: send: %w", err)
+	}
+	// give the DO a moment to fan the frame out before the caller repoints
+	time.Sleep(2 * time.Second)
+	return nil
+}
+
+// redactRelaySecret strips the secret query parameter for log output.
+func redactRelaySecret(raw string) string {
+	if i := strings.Index(raw, "secret="); i >= 0 {
+		return raw[:i] + "secret=***"
+	}
+	return raw
 }

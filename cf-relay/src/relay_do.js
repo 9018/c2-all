@@ -198,6 +198,17 @@ export class RelayDO {
             let msg = null;
             try { msg = JSON.parse(message); } catch { return; }
             if (msg && msg.t === 'ping') this.send(ws, { t: 'pong' });
+            // CC-initiated hot-migration notice: forward the new endpoint to
+            // every agent still connected on this deployment. Necessary because
+            // a MIGRATE_URL redeploy only reaches NEW DO instances — sockets
+            // already established keep running the old code and would hang
+            // forever on a connection whose CC peer is gone.
+            if (msg && msg.t === 'migrate-notice' && typeof msg.to === 'string'
+                && (msg.to.startsWith('wss://') || msg.to.startsWith('ws://'))) {
+                for (const aws of this.agentSockets()) {
+                    try { aws.send(JSON.stringify({ t: 'migrate', to: msg.to })); } catch {}
+                }
+            }
             return;
         }
 

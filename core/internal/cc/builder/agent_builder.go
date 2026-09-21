@@ -159,18 +159,29 @@ func PatchAgentBinary(stubFile, outFile string, configPayload []byte) error {
 		return fmt.Errorf("read stub: %w", err)
 	}
 
-	// Pad config payload to 4096 bytes
+	// Pad config payload to def.AgentConfig size (4096)
 	if len(configPayload) < len(def.AgentConfig) {
 		configPayload = append(configPayload, bytes.Repeat([]byte{0x00}, len(def.AgentConfig)-len(configPayload))...)
 	} else if len(configPayload) > len(def.AgentConfig) {
 		return fmt.Errorf("config payload too large: %d bytes (max %d)", len(configPayload), len(def.AgentConfig))
 	}
 
-	// Replace placeholder with config
-	toWrite = bytes.Replace(toWrite,
-		bytes.Repeat([]byte{0xff}, len(configPayload)),
-		configPayload,
-		1)
+	// Locate the placeholder by its magic prefix (see def.AgentConfigMagic):
+	// raw 0xFF runs are not unique in a compiled binary, and patching the
+	// wrong one leaves the agent with an undecryptable config.
+	magicStart := bytes.Index(toWrite, def.AgentConfigMagic)
+	if magicStart < 0 {
+		return fmt.Errorf("config placeholder magic not found in stub %s", stubFile)
+	}
+	if bytes.Index(toWrite[magicStart+1:], def.AgentConfigMagic) >= 0 {
+		return fmt.Errorf("config placeholder magic is ambiguous in stub %s", stubFile)
+	}
+	// Sanity: the rest of the placeholder region must be untouched 0xFF.
+	rest := toWrite[magicStart+len(def.AgentConfigMagic) : magicStart+len(def.AgentConfig)]
+	if !bytes.Equal(rest, bytes.Repeat([]byte{0xff}, len(rest))) {
+		return fmt.Errorf("config placeholder region corrupted in stub %s", stubFile)
+	}
+	copy(toWrite[magicStart:magicStart+len(def.AgentConfig)], configPayload)
 
 	// Write output
 	if err := os.WriteFile(outFile, toWrite, 0o755); err != nil {
