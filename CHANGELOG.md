@@ -1697,3 +1697,24 @@ agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取�
    （812B，直服）→ BOF 执行 → "Hello 面板!" 回到面板 ✓
 ② 面板发不存在命令 → agent 错误回包 → 面板可见 ✓
 ③ PTY 生命周期回归 ✓（未受影响）
+
+## 2026-09-22 远端部署实证：192.168.99.163（CentOS 7）
+
+经 SOCKS5 (10.0.1.105:20177) SSH 部署 agent 到内网 CentOS 7 目标：
+
+- **GLIBC 教训**：CGO 构建的 agent 需 GLIBC 2.32/2.34，CentOS 7 只有
+  2.17 —— 崩在动态链接。改 CGO_ENABLED=0 纯静态构建（netgo tag），
+  任意发行版可跑；代价是 Linux BOF 加载器不可用（coffloader 的 cgo
+  路径），核心功能（PTY/文件/持久化/隧道）不受影响。
+- **多房间部署**：CC 监听 prod-room-a/b 两个房间；新 agent 用
+  genagent --relay=prod-room-b 与本机 agent 隔离，Durable Object 每
+  房间支持 254 agent。
+- 部署链：SOCKS5 → SSH(paramiko) → SFTP 上传 18M → memfd 运行 →
+  Cloudflare relay（目标有外网，C2 不可直达）→ room-b → CC。
+- 注册实证：checkin ✓ PFS 会话密钥 ✓ AgentToken(cap=router) ✓
+- 功能测试（真实 WS 数据回路）：
+  ① PTY shell：echo CENT163_$(hostname)_$(id -u) →
+     "CENT163_localhost.localdomain_1000"（面板→C2→CF→agent→bash→回）✓
+  ② 错误命令反馈经 relay：'Error: unknown command' 到达面板 ✓
+- 测试技巧记录：PTY 回显会包含命令字面量，断言 marker 须用 $(...)
+  展开后才存在的形态，否则回显先命中导致假失败。
