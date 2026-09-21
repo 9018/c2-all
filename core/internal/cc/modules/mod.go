@@ -50,8 +50,15 @@ func ModuleRun(ctx *context.C2Context) {
 		logging.Errorf("No active module")
 		return
 	}
-	if live.ActiveAgent != nil {
-		target_os := live.ActiveAgent.GOOS
+	// Effective target: web-panel requests carry an explicit ctx.Target;
+	// the CLI relies on live.ActiveAgent. Either must agree with the module's
+	// platform, and at least one must exist for non-local modules.
+	target := ctx.Target
+	if target == nil {
+		target = live.ActiveAgent
+	}
+	if target != nil {
+		target_os := target.GOOS
 		mod_os := strings.ToLower(live.ActiveModule.Platform)
 		if mod_os != "generic" && target_os != mod_os {
 			logging.Errorf("ModuleRun: module %s does not support %s", strconv.Quote(live.ActiveModule.Name), target_os)
@@ -60,7 +67,7 @@ func ModuleRun(ctx *context.C2Context) {
 	}
 
 	// is a target needed?
-	if live.ActiveAgent == nil && !live.ActiveModule.IsLocal {
+	if target == nil && !live.ActiveModule.IsLocal {
 		logging.Errorf("Target not specified")
 		return
 	}

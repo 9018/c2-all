@@ -14,6 +14,7 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/relay"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/wireguard"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/config"
+	"github.com/jm33-m0/emp3r0r/core/internal/cc/modules"
 	"github.com/jm33-m0/emp3r0r/core/internal/live"
 	"github.com/jm33-m0/emp3r0r/core/lib/cli"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -27,6 +28,25 @@ func ServerMain(wg_port int, hosts string, numOperators int) {
 	if err := agents.InitAgentDB(dbPath); err != nil {
 		logging.Errorf("Failed to initialize agent database: %v", err)
 		return
+	}
+
+	// Load disk modules (~/.emp3r0r/modules + prefix modules) so the web
+	// panel's Modules page sees them. Previously only the operator CLI called
+	// InitModules — server mode silently ran with built-ins only.
+	modules.InitModules()
+	modules.StartModuleWatch()
+	// Server mode has no operator console: module runners send commands
+	// directly through the agent tunnel instead of the operator API client
+	// (a nil CmdSender panics on the first module dispatch).
+	modules.CmdSender = func(cmd, jobID, agentTag string) error {
+		a := agents.GetAgentByTag(agentTag)
+		if a == nil {
+			return fmt.Errorf("agent not found: %s", agentTag)
+		}
+		// Register the internal dispatch job so the agent's response is
+		// broadcast to web clients (unknown job IDs are dropped silently).
+		live.CmdTime.Store(jobID, time.Now().Format("2006-01-02 15:04:05.999999999 -0700 MST"))
+		return agents.SendCmd(cmd, jobID, a)
 	}
 
 	// Register log handler to broadcast important logs to operators

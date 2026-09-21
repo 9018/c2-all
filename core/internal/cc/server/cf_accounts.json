@@ -1,0 +1,24 @@
+{
+  "accounts": [
+    {
+      "id": "de125516090c187013ee876402af142e",
+      "api_token": "",
+      "label": "jocelyne5990be@vnl.moonvf.com",
+      "domain": "j6k5as4z6k.kdns.fr",
+      "zone_id": "ae8f7449dc4347e3e84172c53c59dd86"
+    },
+    {
+      "id": "6f821d9007af634b88363fd73e993cb5",
+      "api_token": "",
+      "label": "coh5aff19@j7.foodlpqse.com",
+      "domain": "zhpmt8ymbc.kdns.fr",
+      "zone_id": "0c7fcadbcde2963042e6aacad0619c1c"
+    }
+  ],
+  "active_account_id": "",
+  "worker_name": "emp3r0r-cf-relay",
+  "shared_secret": "",
+  "migrate_threshold": 90,
+  "auto_migrate": true,
+  "migration_history": null
+}

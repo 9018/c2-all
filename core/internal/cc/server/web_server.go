@@ -27,6 +27,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/agents"
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/ftp"
+	"github.com/jm33-m0/emp3r0r/core/internal/cc/modules"
+	c2context "github.com/jm33-m0/emp3r0r/core/internal/cc/context"
 	"github.com/jm33-m0/emp3r0r/core/internal/def"
 	"github.com/jm33-m0/emp3r0r/core/internal/live"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
@@ -298,6 +300,20 @@ func handleWebSendCommand(w http.ResponseWriter, r *http.Request) {
 	// 先登记 JobID，避免响应比登记更快导致 "unknown job ID" 被丢弃
 	live.CmdTime.Store(req.JobID, time.Now().Format("2006-01-02 15:04:05.999999999 -0700 MST"))
 
+	// Module dispatch: a command whose first token names a registered module
+	// must run through the CC-side module runner (it resolves the invocation
+	// and dispatches !custom_module to the agent). Raw-forwarding would hit
+	// the agent's cobra tree, which doesn't know module names — the panel
+	// used to get zero feedback for module invocations.
+	if fields := strings.Fields(strings.TrimSpace(req.Command)); len(fields) > 0 {
+		name := strings.TrimPrefix(fields[0], "!")
+		if val, ok := def.Modules.Load(name); ok {
+			go runWebModule(val.(*def.ModuleConfig), req.Command, agent)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	logging.Infof("handleWebSendCommand: sending command '%s' to agent '%s' (jobID=%s)", req.Command, agent.Tag, req.JobID)
 	if err := agents.SendCmd(req.Command, req.JobID, agent); err != nil {
 		logging.Errorf("handleWebSendCommand: SendCmd failed: %v", err)
@@ -307,6 +323,40 @@ func handleWebSendCommand(w http.ResponseWriter, r *http.Request) {
 	logging.Infof("handleWebSendCommand: command sent successfully")
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// runWebModule executes a registered module from a web-panel command line,
+// mirroring the operator CLI's runModuleByName: JSON defaults first, then
+// --flag value overrides parsed from the command line. live.ActiveModule is
+// global (same as the CLI) — concurrent web module runs would race on it.
+func runWebModule(mod *def.ModuleConfig, command string, agent *def.Emp3r0rAgent) {
+	flags := make(map[string]string, len(mod.Options))
+	for name, opt := range mod.Options {
+		if opt != nil {
+			flags[name] = opt.Val // JSON defaults; omitted flags fall back to these
+		}
+	}
+	tokens := util.ParseCmd(command)
+	for i := 1; i < len(tokens); i++ {
+		tok := tokens[i]
+		if !strings.HasPrefix(tok, "--") {
+			continue
+		}
+		key, val := strings.TrimPrefix(tok, "--"), ""
+		// support both --flag value and --flag=value forms
+		if eq := strings.Index(key, "="); eq >= 0 {
+			val, key = key[eq+1:], key[:eq]
+		} else if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "--") {
+			i++
+			val = tokens[i]
+		}
+		if _, known := mod.Options[key]; known {
+			flags[key] = val
+		}
+	}
+	modules.SetActiveModule(mod.Name)
+	ctx := &c2context.C2Context{Target: agent, Flags: flags}
+	modules.ModuleRun(ctx)
 }
 
 // handleWebListModules 获取模块列表

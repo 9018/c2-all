@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/jm33-m0/emp3r0r/core/internal/cc/base/agents"
 	"github.com/jm33-m0/emp3r0r/core/internal/def"
+	"github.com/jm33-m0/emp3r0r/core/internal/live"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 )
 
@@ -171,6 +174,19 @@ func handleWWWRelayStream(conn io.ReadWriteCloser, agentUUID, streamID, remoteAd
 	streamID = strings.TrimSpace(streamID)
 	if streamID == "" {
 		logging.Errorf("CRITICAL: www relay: empty stream id from %s", remoteAddr)
+		conn.Close()
+		return
+	}
+
+	// Server-mode fast path: module payloads are hosted in the CC's own
+	// WWWRoot (handleInMemoryModule writes them there), so serve the bytes
+	// directly instead of round-tripping through an operator session. The
+	// web panel has no operator tunnel — the relay path below would fail
+	// with "no active tunnel" and the agent would see an empty body.
+	if data, err := os.ReadFile(filepath.Join(live.WWWRoot, filepath.Base(streamID))); err == nil {
+		if _, werr := conn.Write(data); werr != nil {
+			logging.Errorf("www relay: direct serve of %q failed: %v", streamID, werr)
+		}
 		conn.Close()
 		return
 	}

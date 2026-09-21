@@ -1659,3 +1659,41 @@ agent 身份路径时，KEK（内嵌配置派生）与真实缓存不匹配 → 
 - **多会话隔离 9/9 全过**：3 个并发会话各自启动/prompt/输入/输出完全
   隔离（各自标记不出现在其他会话的输出中）。
 - 测试路径：/tmp/test_pty_e2e.py，C2_HOST 环境变量可配。
+
+## 2026-09-22 面板模块功能修复与端到端实证
+
+用户要求"不能只看 200，要测功能"。逐层排障后修复 4 个 server 模式缺陷，
+最终 BOF 在 agent 上真实执行、输出回到面板：
+
+- **server 模式不加载磁盘模块**：InitModules 只在 operator CLI 调用，
+  面板永远只有 9 个内置模块。ServerMain 现在调用 InitModules +
+  StartModuleWatch（216 个模块上线）。
+- **面板模块命令直发 agent 报未知命令**：/api/command 不识别模块名，把
+  `hello_linux` 原样发给 agent（cobra 报 unknown command）。新增
+  runWebModule：识别模块名 → 解析 --flag（JSON 默认值兜底）→ 走 CC 侧
+  moduleCustom（与 CLI 同路径）。
+- **模块文件下发依赖 operator 隧道**：www relay 把文件请求转给 operator
+  会话，server 模式的 "web-ui" 无隧道 → agent 拿到空响应（checksum
+  e3b0c442 = 空 SHA256）。stream_relay 加直服 fast path：文件在 CC 自己
+  的 WWWRoot 就直接回写，仅不存在时才走 operator relay。
+- **CmdSender 未接线**：server 模式 modules.CmdSender 为 nil → 模块分发
+  即 panic。接线为 agents.SendCmd 直连（无 operator API 中转），并注册
+  内部 job 到 CmdTime 让响应能广播到面板。
+- **未知命令零反馈**：cobra 的 Find() 在旗标解析前就报错，NotifyC2 读到
+  空 --job_id，CC 丢弃响应——面板对打错字毫无反应。新增 NotifyC2JobID
+  （显式 JobID），handler 错误路径改用它。实测 "Error: unknown command"
+  正常到达面板。
+- **ModuleRun 目标判定**：改为 ctx.Target 优先（web 请求带显式目标），
+  live.ActiveAgent 兜底（CLI 语义不变）。
+
+MagicString 三处一致性教训：config 加密/解密 + 交互握手要求 CC、agent
+stub、genagent 同 magic。build.py 每次构建随机生成并注入三者；本次用
+同一 magic 手工重建（CC/stub/genagent），后续 genagent 重打补丁即可换
+agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取）——
+正式发布仍应走 build.py。
+
+端到端验证（真实 WS + HTTP API，非 200 空检查）：
+① 面板发 hello_linux --who 面板 → CC 构建调用 → agent 下载 COFF
+   （812B，直服）→ BOF 执行 → "Hello 面板!" 回到面板 ✓
+② 面板发不存在命令 → agent 错误回包 → 面板可见 ✓
+③ PTY 生命周期回归 ✓（未受影响）

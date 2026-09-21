@@ -104,6 +104,10 @@ func HandleC2Command(cmdData *def.MsgTunData) {
 	command.SetErr(logging.Writer())
 	err := command.Execute()
 	if err != nil {
-		c2transport.NotifyC2(command, "Error: %v", err)
+		// cobra can fail in Find() before any flag parsing (unknown command,
+		// typo) — NotifyC2 would read an unset --job_id and the CC would drop
+		// the response, leaving the operator panel silent. Send with the
+		// JobID we already hold so errors are visible in the console.
+		c2transport.NotifyC2JobID(job_id, "Error: %v", err)
 	}
 }
