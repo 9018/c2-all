@@ -1786,3 +1786,33 @@ agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取�
 - 迁移后 PTY 均正常 ✓
 - 注意：面板 agents 的 Transport 字段是注册时静态 URL，不反映迁移后实际
   端点；判断迁移状态应看 agent 日志或 cc 端连接。
+
+## 2026-09-22 真实抓包：流量混淆验证 + ECH 加固
+
+### 抓包方法
+- dumpcap（wireshark 组权限）抓 CC↔CF relay 100 秒原始包
+- 同窗口注入真实 C2 流量（20 条 PTY 命令 + 2MB 输出）
+- 同窗口用真实 Chromium 访问相同 relay 域名作对照组
+
+### 结论（TLS 层）
+- CC 的 Client Hello 与真实 Chromium 逐项一致：16 个 cipher suite 同列表
+  同顺序、ALPN h2+http/1.1、sig_algs 相同、GREASE 位置相同
+- GREASE 值每次连接随机（dada/baba/caca vs 7a7a/3a3a/8a8a）→ JA3 每次都
+  不同，防止指纹聚合
+- 含 GREASE ECH 扩展（fe0d）——与 Chrome 无 config 时的行为一致
+
+### 结论（应用层）
+- C2 数据流熵 = 8.000 bits/byte（理论上限），可打印占比 37%（随机分布
+  期望值），无任何明文特征（无 HTTP 方法/websocket/命令/标识符）
+
+### ECH 发现与修复
+- DNS HTTPS RR 里两个 relay 域名都发布了 ECH config（public_name=
+  cloudflare-ech.com）
+- 真实抓包显示 CC 当时只有 GREASE ECH，SNI 明文暴露 relay 域名
+- 根因：DoH 拉取 config 的路径不稳定（cloudflare-dns.com 被 RST），
+  config 缺失时 fallback 明文
+- 实测：从本机注入 config 后真 ECH 握手 0.6-1.0s 成功（status=armed）
+- 修复：RefreshECHConfig 增加 UDP53 系统解析器 fallback（读
+  /etc/resolv.conf）
+- 部署新 agent 后 163 日志确认：03:39:31 ECH armed → 真加密生效，
+  relay 域名不再明文出现在 Client Hello

@@ -17,10 +17,14 @@ package transport
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jm33-m0/emp3r0r/core/lib/logging"
 	"github.com/miekg/dns"
 )
 
@@ -240,8 +244,14 @@ func RefreshECHConfig(doh, host string) bool {
 	// URL query (which ends up in access logs)
 	body, err := DoHPost(DoHHTTPClient(nil), doh, secret, wire)
 	if err != nil {
-		setECHStatus(host, "off", "ech config fetch failed: "+err.Error())
-		return false
+		// DoH endpoint down/blocked: fall back to a plain UDP resolver before
+		// giving up — ECH hiding the relay SNI is worth one extra query.
+		if body, err = dnsQueryUDP(host); err == nil {
+			logging.Infof("ech: DoH failed (%v), fetched HTTPS record via UDP resolver", err)
+		} else {
+			setECHStatus(host, "off", "ech config fetch failed: "+err.Error())
+			return false
+		}
 	}
 	answer := new(dns.Msg)
 	if err := answer.Unpack(body); err != nil {
@@ -283,4 +293,57 @@ func refreshECHBackground(host string) {
 		return
 	}
 	go RefreshECHConfig(doh, host)
+}
+
+// dnsReadSystemResolvers extracts the nameservers from /etc/resolv.conf,
+// falling back to a public resolver list when parsing fails.
+func dnsReadSystemResolvers() []string {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	var servers []string
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "nameserver ") {
+				ns := strings.TrimSpace(strings.TrimPrefix(line, "nameserver "))
+				if ns != "" {
+					servers = append(servers, ns)
+				}
+			}
+		}
+	}
+	if len(servers) == 0 {
+		servers = []string{"1.1.1.1", "8.8.8.8"}
+	}
+	return servers
+}
+
+// dnsQueryUDP asks the system resolvers (UDP 53) for the HTTPS record of
+// host — the ECH-config fallback when every DoH path is unavailable.
+func dnsQueryUDP(host string) ([]byte, error) {
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(host), dns.TypeHTTPS)
+	m.RecursionDesired = true
+	client := new(dns.Client)
+	client.Net = "udp"
+	client.Timeout = 5 * time.Second
+	servers := dnsReadSystemResolvers()
+	var lastErr error
+	for _, server := range servers {
+		resp, _, err := client.Exchange(m, net.JoinHostPort(server, "53"))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return resp.Pack()
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no system resolver available")
+	}
+	return nil, lastErr
+}
+
+// ECHProbeConnect dials + handshakes with real ECH for host, for tests and
+// diagnostics. Dial failure and handshake failure are both returned as-is.
+func ECHProbeConnect(dial func() (net.Conn, error), hostport string) (net.Conn, error) {
+	return tlsConnectOnce(dial, hostport, false)
 }
