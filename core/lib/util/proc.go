@@ -79,6 +79,10 @@ func SanitizedEnviron() []string {
 		"XDG_CACHE_HOME": true, "XDG_SESSION_TYPE": true,
 		"DBUS_SESSION_BUS_ADDRESS": true, "DISPLAY": true,
 		"WAYLAND_DISPLAY": true, "XAUTHORITY": true,
+		// operator/debug switches: they must survive the masquerade re-exec,
+		// otherwise every hook-spawned instance sleeps its full jitter again
+		// and the key-persist override never reaches the real process
+		"EMP_NO_STARTUP_JITTER": true, "EMP_NO_KEY_PERSIST": true,
 	}
 	out := make([]string, 0, 12)
 	for _, kv := range os.Environ() {

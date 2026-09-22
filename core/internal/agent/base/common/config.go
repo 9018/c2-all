@@ -36,6 +36,9 @@ func InitConfig() (err error) {
 		return fmt.Errorf("parsing %d bytes of CBOR data (%s...): %v", len(configData), short_view, err)
 	}
 
+	logging.Warningf("InitConfig: CBOR AgentUUID=%q Parent=%q MultiHost=%v",
+		RuntimeConfig.AgentUUID, RuntimeConfig.AgentUUIDParent, RuntimeConfig.MultiHost)
+
 	// Safe defaults
 	if RuntimeConfig.PollInterval == 0 {
 		RuntimeConfig.PollInterval = 60
