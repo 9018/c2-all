@@ -1816,3 +1816,28 @@ agent 代码。ad-hoc 构建失去 garble 混淆（magic 可被 strings 提取�
   /etc/resolv.conf）
 - 部署新 agent 后 163 日志确认：03:39:31 ECH armed → 真加密生效，
   relay 域名不再明文出现在 Client Hello
+
+## 2026-09-22 持久化+行为双机实测（163 CentOS7 / 205 Ubuntu22.04）
+
+### 持久化
+- 205（Ubuntu）：systemd user unit（linger=on）+ cron @reboot + shellrc 全套
+- 163（CentOS 7）：systemd 219 不支持所需 unit 键 → 按设计降级为
+  cron @reboot + shellrc
+- 伪装名随机（gemini/codex/gpt4all/ollama_llama_s）；落盘副本时间戳回溯
+  20-180 天；cron/rc 行带 "ai-agent autostart" marker（remove 只碰自己的行）
+
+### 重启回归（205 实测）
+- reboot 后 systemd/cron 先后拉起：cron 实例赢得单实例锁正常上线
+  （约 1 分钟内注册、ECH armed），systemd 实例安静退出（exit 0，
+  Restart=on-failure 不触发）——恰如一个正常的单实例守护进程
+
+### 发现并修复：单实例锁
+- 缺陷 1：无单实例互斥 —— shellrc 在每次 SSH 登录时拉起一个实例，
+  并发实例各自 mint 一个 per-host UUID，一台机器冒出多个身份
+  （实测：3 次 SSH = 3 个会话）
+- 缺陷 2（首版锁仍失效）：锁检查放在 startup jitter 之后 —— 新实例先
+  睡完最长 5 分钟 jitter 才检查锁，期间并行实例并存；且 os.OpenFile
+  强制 O_CLOEXEC，锁 fd 活不过 masquerade 的 execve
+- 修复：AcquireSingleton 用 syscall.Open（无 CLOEXEC）+ flock，移到
+  masquerade 之后、jitter 之前；锁 fd 穿越 re-exec，输家立刻安静退出
+- 验证：两台各 4 次 SSH 登录，实例数恒为 1，面板会话数恒为 2

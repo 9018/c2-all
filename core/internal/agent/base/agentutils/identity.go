@@ -22,6 +22,7 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/internal/agent/base/common"
 	"github.com/jm33-m0/emp3r0r/core/internal/transport"
 	"github.com/jm33-m0/emp3r0r/core/lib/logging"
+
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -444,3 +445,4 @@ func SignWithAgentKey(data []byte) ([]byte, error) {
 	}
 	return transport.SignJSONWithKey(key, data)
 }
+
